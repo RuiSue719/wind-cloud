@@ -1,0 +1,40 @@
+<svg width="360" height="360" viewBox="0 0 360 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Q版女性工程师">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#dfe9ff"/>
+      <stop offset="100%" stop-color="#f7fbff"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7a3f2e"/>
+      <stop offset="100%" stop-color="#5f2d20"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="10" y="10" width="340" height="340" rx="52" fill="url(#bg)"/>
+  <ellipse cx="180" cy="320" rx="74" ry="16" fill="#d6deef"/>
+
+  <ellipse cx="180" cy="125" rx="94" ry="88" fill="url(#hair)"/>
+  <circle cx="180" cy="136" r="68" fill="#ffd9bf"/>
+  <path d="M124 130 C148 116, 212 116, 236 130" stroke="#6e3728" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <circle cx="154" cy="145" r="14" fill="#4e261b"/>
+  <circle cx="206" cy="145" r="14" fill="#4e261b"/>
+  <circle cx="149" cy="140" r="4" fill="#fff"/>
+  <circle cx="201" cy="140" r="4" fill="#fff"/>
+  <path d="M168 174 Q180 182 192 174" stroke="#cc6f5a" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M102 100 C130 70, 232 70, 258 104" stroke="#6b3426" stroke-width="12" fill="none" stroke-linecap="round"/>
+
+  <rect x="112" y="84" width="136" height="30" rx="14" fill="#6e8fb0"/>
+  <rect x="104" y="76" width="152" height="46" rx="23" fill="none" stroke="#4e6582" stroke-width="8"/>
+
+  <rect x="126" y="208" width="108" height="86" rx="14" fill="#2f79c8"/>
+  <rect x="116" y="196" width="128" height="40" rx="18" fill="#3588dc"/>
+  <rect x="168" y="224" width="24" height="70" rx="8" fill="#184f88"/>
+  <circle cx="158" cy="218" r="5" fill="#ffbf3c"/>
+  <circle cx="202" cy="218" r="5" fill="#ffbf3c"/>
+
+  <rect x="92" y="212" width="30" height="56" rx="14" fill="#ffb145"/>
+  <rect x="238" y="212" width="30" height="56" rx="14" fill="#ffb145"/>
+
+  <path d="M74 236 L96 220 L124 248 L106 264 Z" fill="#d8e5f7" stroke="#6f7f98" stroke-width="6"/>
+  <rect x="60" y="250" width="18" height="48" rx="9" fill="#c9d3e5" stroke="#6f7f98" stroke-width="6"/>
+</svg>

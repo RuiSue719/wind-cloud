@@ -761,7 +761,7 @@ class CloudLLMService:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"

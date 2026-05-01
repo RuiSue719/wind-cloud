@@ -1255,7 +1255,7 @@ renderCurrentSession();
 
 const cur = getCurrentSession();
 if (!cur || cur.messages.length === 0) {
-  const greet = "你好，我是你的工业故障问答助手。现在可同时结合文本知识库、Neo4j知识图谱和本地Ollama模型回答问题。";
+  const greet = "你好，我是你的工业故障问答助手。现在可同时结合文本知识库、Neo4j知识图谱和qwen模型回答问题。";
   appendMessage("bot", greet, []);
   addSessionMessage("bot", greet, []);
 }

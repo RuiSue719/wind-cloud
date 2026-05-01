@@ -3,12 +3,15 @@ import re
 import os
 import time
 import csv
+import sqlite3
+from datetime import datetime
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 from neo4j import GraphDatabase
 
@@ -41,6 +44,16 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
+LOGIN_DEFAULT_ROLE = "admin"
+
+USER_ROLE_USER = "user"
+USER_ROLE_ADMIN = "admin"
+
+QWEN_SYSTEM_PROMPT = (
+    "你是风电故障诊断专属AI，只回答风机齿轮箱、叶片、发电机、轴承故障，"
+    "禁止通用回答；输出格式：故障位置→故障等级→原因→3步维修指令；严禁无关内容。"
+)
+DEFAULT_SYSTEM_PROMPT = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
 
 
 FAQ_POOL = [
@@ -755,20 +768,21 @@ class CloudLLMService:
         max_models_to_try: int = 1,
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
+        system_prompt: str = "",
     ) -> Optional[str]:
         """调用 Groq API（OpenAI 兼容）"""
         if not self.api_key:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = "https://api.siliconflow.cn/v1/chat/completions"
+        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         messages = [
-            {"role": "system", "content": "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
         ]
 
         payload = {
@@ -790,10 +804,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "API 返回空内容"
+            self.last_error = "Groq 返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"API 调用失败: {exc}"
+            self.last_error = f"Groq 调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
@@ -809,11 +823,71 @@ KB_PATHS = [
     BASE_DIR / "data" / "wind_power_qa.md",
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
+USER_DB_PATH = BASE_DIR / "users.sqlite3"
 QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
-cloud_llm = CloudLLMService(GROQ_API_KEY, "Qwen/Qwen3-8B")
+cloud_llm = CloudLLMService(GROQ_API_KEY, GROQ_MODEL)
+
+
+def _db_connect():
+    conn = sqlite3.connect(USER_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_user_db() -> None:
+    with _db_connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                phone TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+    seed_default_admin()
+
+
+def seed_default_admin() -> None:
+    existing = get_user_by_username(LOGIN_DEFAULT_USER)
+    if existing:
+        return
+    create_user(
+        username=LOGIN_DEFAULT_USER,
+        password=LOGIN_DEFAULT_PASSWORD,
+        role=LOGIN_DEFAULT_ROLE,
+        phone="",
+    )
+
+
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    if not username:
+        return None
+    with _db_connect() as conn:
+        cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+        return cur.fetchone()
+
+
+def create_user(username: str, password: str, role: str, phone: str = "") -> None:
+    password_hash = generate_password_hash(password)
+    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _db_connect() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, role, phone, created_at),
+        )
+        conn.commit()
+
+
+init_user_db()
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -899,7 +973,7 @@ def build_citation_fallback(
 @app.before_request
 def require_login():
     endpoint = request.endpoint or ""
-    if endpoint in {"login", "static"}:
+    if endpoint in {"login", "register", "static"}:
         return None
     if session.get("logged_in"):
         return None
@@ -911,15 +985,45 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
+    register_success = ""
+    register_mode = False
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
-        if username == LOGIN_DEFAULT_USER and password == LOGIN_DEFAULT_PASSWORD:
+        user = get_user_by_username(username)
+        if user and check_password_hash(user["password_hash"], password):
             session["logged_in"] = True
-            session["username"] = username
+            session["username"] = user["username"]
+            session["role"] = user["role"]
             return redirect(url_for("index"))
-        error = "用户名或密码错误。默认账号：admin，默认密码：123456"
-    return render_template("login.html", error=error)
+        error = "用户名或密码错误。"
+    if request.args.get("register") == "ok":
+        register_success = "注册成功，请登录。"
+    if request.args.get("mode") == "register":
+        register_mode = True
+    return render_template("login.html", error=error, register_success=register_success, register_mode=register_mode)
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    username = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "").strip()
+    role = (request.form.get("role") or "").strip().lower()
+    phone = (request.form.get("phone") or "").strip()
+
+    error = ""
+    if not username or not password or not role:
+        error = "注册信息不完整，请填写用户名、密码与身份类型。"
+    elif role not in {USER_ROLE_USER, USER_ROLE_ADMIN}:
+        error = "身份类型无效，请重新选择。"
+    elif get_user_by_username(username):
+        error = "用户名已存在，请更换。"
+
+    if error:
+        return render_template("login.html", error="", register_error=error, register_mode=True)
+
+    create_user(username=username, password=password, role=role, phone=phone)
+    return redirect(url_for("login", register="ok"))
 
 
 @app.get("/logout")
@@ -930,7 +1034,9 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    role = session.get("role") or USER_ROLE_USER
+    username = session.get("username") or ""
+    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN), username=username)
 
 
 @app.get("/api/faqs")
@@ -958,7 +1064,6 @@ def get_models():
 @app.get("/api/status")
 def get_status():
     neo_ok = neo4j_service.available()
-    models = cloud_llm.list_models()
     return jsonify(
         {
             "neo4j": {
@@ -967,14 +1072,6 @@ def get_status():
                 "user": neo4j_service.user,
                 "database": neo4j_service.database,
                 "error": neo4j_service.last_error,
-            },
-            "ollama": {
-                "available": cloud_llm.available(),
-                #"baseUrl": cloud_llm.base_url,
-                "defaultModel": cloud_llm.default_model,
-                #"recommendedModel": cloud_llm.recommended_model(ollama_models),
-                "models": models,
-                "error": cloud_llm.last_error,
             },
         }
     )
@@ -1029,6 +1126,149 @@ def kg_node():
         node_label = neo4j_service.get_node_label(node_id)
     csv_details = kb.node_detail_cards(node_label, top_k=4) if node_label else []
     return jsonify({"triplets": triplets, "nodeLabel": node_label, "csvDetails": csv_details, "error": neo4j_service.last_error})
+
+
+def _parse_numeric_series(file_text: str) -> Dict[str, List[float]]:
+    lines = [line.strip() for line in (file_text or "").splitlines() if line.strip()]
+    if not lines:
+        return {"temperature": [], "vibration": []}
+
+    has_header = any(re.search(r"[a-zA-Z\u4e00-\u9fff]", lines[0]))
+    temp_vals: List[float] = []
+    vib_vals: List[float] = []
+
+    if has_header:
+        reader = csv.DictReader(lines)
+        for row in reader:
+            for key, value in row.items():
+                if value is None:
+                    continue
+                val = str(value).strip()
+                if not val:
+                    continue
+                try:
+                    num = float(val)
+                except ValueError:
+                    continue
+                key_norm = str(key or "").lower()
+                if re.search(r"温度|temp|temperature", key_norm):
+                    temp_vals.append(num)
+                if re.search(r"振动|vibration|vib", key_norm):
+                    vib_vals.append(num)
+    else:
+        tokens = re.split(r"[\s,;\t]+", " ".join(lines))
+        for token in tokens:
+            try:
+                num = float(token)
+            except ValueError:
+                continue
+            temp_vals.append(num)
+
+    return {"temperature": temp_vals, "vibration": vib_vals}
+
+
+def _graph_root_cause(alarm_name: str) -> Dict[str, str]:
+    if not alarm_name:
+        return {"mode": "", "cause": "", "steps": ""}
+    rows = neo4j_service.run_read(
+        """
+        MATCH (p:报警码 {name: $alarm})-[r:对应]->(m:故障模式)
+        RETURN m.name AS mode
+        LIMIT 1
+        """,
+        {"alarm": alarm_name},
+    )
+    mode = str(rows[0].get("mode")) if rows else ""
+
+    cause = ""
+    steps: List[str] = []
+    if mode:
+        cause_rows = neo4j_service.run_read(
+            """
+            MATCH (m:故障模式 {name: $mode})-[r]->(c)
+            WHERE type(r) IN ["原因", "根因", "导致", "引起"]
+            RETURN coalesce(c.name, c.title, labels(c)[0]) AS cause
+            LIMIT 1
+            """,
+            {"mode": mode},
+        )
+        if cause_rows:
+            cause = str(cause_rows[0].get("cause") or "")
+
+        step_rows = neo4j_service.run_read(
+            """
+            MATCH (m:故障模式 {name: $mode})-[r:维修步骤]->(s)
+            RETURN coalesce(s.name, s.title) AS step, coalesce(s.id, s.code) AS code
+            LIMIT 3
+            """,
+            {"mode": mode},
+        )
+        for row in step_rows:
+            step_text = str(row.get("step") or "").strip()
+            code = str(row.get("code") or "").strip()
+            if step_text:
+                steps.append(f"{step_text}{f'（{code}）' if code else ''}")
+
+        if not steps:
+            kb_hits = kb.retrieve(mode, top_k=3, focus_terms=[mode])
+            for hit in kb_hits:
+                if not str(hit.get("source", "")).startswith("csv:repair_step"):
+                    continue
+                text = hit.get("text", "")
+                if text:
+                    steps.append(text)
+                if len(steps) >= 3:
+                    break
+
+    return {"mode": mode, "cause": cause, "steps": "\n".join(steps)}
+
+
+@app.post("/api/diagnose")
+def diagnose():
+    if "file" not in request.files:
+        return jsonify({"error": "未上传文件"}), 400
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "文件无效"}), 400
+
+    raw = file.read()
+    try:
+        text = raw.decode("utf-8-sig", errors="ignore")
+    except Exception:
+        text = raw.decode("utf-8", errors="ignore")
+
+    series = _parse_numeric_series(text)
+    temps = series.get("temperature") or []
+    vibs = series.get("vibration") or []
+
+    max_temp = max(temps) if temps else None
+    max_vib = max(vibs) if vibs else None
+
+    alarm_name = ""
+    threshold_text = []
+    if max_temp is not None:
+        if max_temp > 85:
+            alarm_name = "发电机定子温度高报警"
+            threshold_text.append(f"最高温度 {max_temp:.1f}℃ 超过 85℃ 阈值")
+    if max_vib is not None and not alarm_name:
+        if max_vib > 4.5:
+            alarm_name = "轴承振动超限报警"
+            threshold_text.append(f"最高振动 {max_vib:.2f} 超过 4.5 阈值")
+
+    if not threshold_text:
+        return jsonify({"result": "未检测到明显超标异常点，请补充更完整的时序数据。"})
+
+    root = _graph_root_cause(alarm_name)
+    mode = root.get("mode") or "未知故障模式"
+    cause = root.get("cause") or "未知根因"
+    steps = root.get("steps") or "建议进入图谱管理完善维修步骤。"
+
+    result = (
+        f"诊断结果：在数据中发现{threshold_text[0]}。"
+        f"根据知识图谱推断，该现象很可能指向“{alarm_name}”，其根本原因可能为“{cause}”。\n"
+        f"对应故障模式：{mode}。\n维修步骤：\n{steps}"
+    )
+    return jsonify({"result": result, "alarm": alarm_name, "mode": mode, "cause": cause})
 
 
 @app.post("/api/chat")
@@ -1126,12 +1366,15 @@ def chat():
         response_state = "fallback"
         llm_error = "已基于引用证据快速生成答案。"
     else:
+        model_hint = (model_name or cloud_llm.default_model or "").lower()
+        system_prompt = QWEN_SYSTEM_PROMPT if "qwen" in model_hint else DEFAULT_SYSTEM_PROMPT
         llm_raw_text = cloud_llm.chat(
             prompt_head + "\n" + llm_prompt,
             model=model_name,
             max_models_to_try=1,
             num_predict_override=llm_num_predict,
             timeout_seconds_override=llm_timeout,
+            system_prompt=system_prompt,
         )
         llm_text = (llm_raw_text or "").strip()
         cloud_http_ok = cloud_llm.last_http_ok
@@ -1200,5 +1443,6 @@ def chat():
 
 
 if __name__ == "__main__":
+    init_user_db()
     port = int(os.environ.get("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False)

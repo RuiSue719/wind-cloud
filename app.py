@@ -35,9 +35,9 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-# 移除 OLLAMA 相关的环境变量，添加 GROQ
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
+SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "llama-3.3-70b-versatile")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
@@ -756,12 +756,12 @@ class CloudLLMService:
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
     ) -> Optional[str]:
-        """调用 Groq API（OpenAI 兼容）"""
+        """调用 API"""
         if not self.api_key:
-            self.last_error = "未配置 GROQ_API_KEY"
+            self.last_error = "未配置SILICONFLOW_API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -790,14 +790,14 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "SILICONFLOW返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"SILICONFLOW调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
-        # Groq 不需要动态获取模型列表，直接返回默认模型即可
+        # SILICONFLOW不需要动态获取模型列表，直接返回默认模型即可
         return [self.default_model] if self.api_key else []
 
     def available(self) -> bool:
@@ -813,7 +813,7 @@ QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
-cloud_llm = CloudLLMService(GROQ_API_KEY, GROQ_MODEL)
+cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]

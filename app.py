@@ -1136,6 +1136,7 @@ def chat():
     message = payload.get("message", "")
     image_name = payload.get("imageName", "")
     model_name = payload.get("model", "")
+    knowledge_mode = (payload.get("knowledgeMode") or "local").strip().lower()
     graph_node = (payload.get("graphNode") or "").strip()
     graph_triplets_payload = payload.get("graphTriplets") or []
 
@@ -1187,7 +1188,7 @@ def chat():
             "【知识图谱三元组】\n" + "\n".join([f"- ({t['head']})-[{t['rel']}]->({t['tail']})" for t in kg_hits])
         )
 
-    if not context_blocks and query:
+    if not context_blocks and query and knowledge_mode != "open":
         return jsonify(
             {
                 "answer": "根据现有知识库与图谱，我暂时没有检索到相关内容。请补充设备名称、故障现象或关键词后重试。",
@@ -1195,11 +1196,14 @@ def chat():
             }
         )
 
-    llm_prompt = (
-        f"用户问题：{query}\n\n"
-        + "\n\n".join(context_blocks)
-        + "\n\n请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
-    )
+    if context_blocks:
+        llm_prompt = (
+            f"用户问题：{query}\n\n"
+            + "\n\n".join(context_blocks)
+            + "\n\n请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
+        )
+    else:
+        llm_prompt = f"用户问题：{query}\n\n若需要，可结合通用知识给出简洁、可执行的建议。"
 
     request_mode = (payload.get("requestMode") or "").strip().lower()
     is_kg_auto_mode = request_mode == "kg-auto"
@@ -1209,7 +1213,10 @@ def chat():
     elif is_citation_mode:
         prompt_head = "你是风电设备维护助手。必须在100字内给出完整结论，不要输出推理过程。"
     else:
-        prompt_head = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
+        if knowledge_mode == "open":
+            prompt_head = "你是工业设备故障问答助手。可结合通用知识与提供的上下文，结论简洁、可执行。"
+        else:
+            prompt_head = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
 
     llm_num_predict = 220 if is_citation_mode else (256 if is_kg_auto_mode else None)
     llm_timeout = 180 if is_citation_mode else (180 if is_kg_auto_mode else None)

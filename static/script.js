@@ -57,7 +57,9 @@ let graphEdgesCache = [];
 let pinnedNodeId = null;
 let isVoiceListening = false;
 
-const CHAT_STORAGE_KEY = "industrial_qa_history_v1";
+const CHAT_STORAGE_BASE = "industrial_qa_history_v1";
+const activeUsername = document.body?.dataset?.username || "guest";
+const CHAT_STORAGE_KEY = `${CHAT_STORAGE_BASE}:${activeUsername}`;
 const CHAT_REQUEST_TIMEOUT_MS = 180000;
 const GRAPH_AUTO_REQUEST_TIMEOUT_MS = 240000;
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 180000;

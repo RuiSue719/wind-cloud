@@ -228,6 +228,16 @@ body {
   background: #f6f9ff;
 }
 
+.knowledge-toggle-compact {
+  padding: 2px;
+  gap: 2px;
+}
+
+.knowledge-toggle-compact .knowledge-btn {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .knowledge-btn {
   border: none;
   background: transparent;

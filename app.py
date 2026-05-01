@@ -38,9 +38,9 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-# 移除 OLLAMA 相关的环境变量，添加 GROQ
+# 移除 OLLAMA 相关的环境变量，添加 GROQ（实际上为硅基流动，适配中国大陆）
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "Qwen/Qwen3-8B")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
@@ -49,11 +49,11 @@ LOGIN_DEFAULT_ROLE = "admin"
 USER_ROLE_USER = "user"
 USER_ROLE_ADMIN = "admin"
 
-QWEN_SYSTEM_PROMPT = (
+SYSTEM_PROMPT_QWEN = (
     "你是风电故障诊断专属AI，只回答风机齿轮箱、叶片、发电机、轴承故障，"
-    "禁止通用回答；输出格式：故障位置→故障等级→原因→3步维修指令；严禁无关内容。"
+    "禁止通用回答；输出格式：故障位置→故障等级→原因→3步维修指令；"
+    "严禁无关内容。"
 )
-DEFAULT_SYSTEM_PROMPT = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
 
 
 FAQ_POOL = [
@@ -768,21 +768,20 @@ class CloudLLMService:
         max_models_to_try: int = 1,
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
-        system_prompt: str = "",
     ) -> Optional[str]:
-        """调用 Groq API（OpenAI 兼容）"""
+        """调用硅基流动API"""
         if not self.api_key:
-            self.last_error = "未配置 GROQ_API_KEY"
+            self.last_error = "未配置API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         messages = [
-            {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": SYSTEM_PROMPT_QWEN},
+            {"role": "user", "content": prompt}
         ]
 
         payload = {
@@ -804,10 +803,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "硅基流动API返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"模型调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
@@ -970,6 +969,100 @@ def build_citation_fallback(
     return f"{node}主要表现为{symptom}；常见原因为{cause}；建议先{action}。"
 
 
+def _parse_timeseries_payload(file_storage):
+    raw = file_storage.read()
+    if not raw:
+        return None
+    try:
+        text = raw.decode("utf-8-sig")
+    except Exception:
+        text = raw.decode("gbk", errors="ignore")
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    header = lines[0]
+    is_csv = "," in header or "\t" in header
+    values = []
+    temp_values = []
+    vib_values = []
+
+    def classify_col(name: str) -> str:
+        name = name.lower()
+        if "温度" in name or "temp" in name:
+            return "temp"
+        if "振动" in name or "vib" in name or "vibration" in name:
+            return "vib"
+        return "other"
+
+    if is_csv:
+        delimiter = "\t" if "\t" in header and "," not in header else ","
+        reader = csv.DictReader(lines, delimiter=delimiter)
+        for row in reader:
+            if not row:
+                continue
+            for key, val in row.items():
+                if val is None:
+                    continue
+                try:
+                    num = float(str(val).strip())
+                except Exception:
+                    continue
+                values.append(num)
+                kind = classify_col(str(key))
+                if kind == "temp":
+                    temp_values.append(num)
+                elif kind == "vib":
+                    vib_values.append(num)
+    else:
+        for line in lines:
+            parts = re.split(r"[\s,]+", line)
+            for part in parts:
+                try:
+                    num = float(part)
+                except Exception:
+                    continue
+                values.append(num)
+
+    if not values:
+        return None
+
+    result = {
+        "max": max(values),
+        "temp_max": max(temp_values) if temp_values else None,
+        "vib_max": max(vib_values) if vib_values else None,
+    }
+    return result
+
+
+def _graph_root_cause(alarm_name: str) -> Dict[str, str]:
+    if not alarm_name:
+        return {}
+    rows = neo4j_service.run_read(
+        """
+        MATCH (p:报警码 {name: $alarm})-[r:对应]->(m:故障模式)
+        OPTIONAL MATCH (m)-[:可能原因]->(c:故障原因)
+        OPTIONAL MATCH (m)-[:维修步骤]->(s)
+        RETURN m.name AS mode,
+               coalesce(c.name, c.title, c.reason) AS cause,
+               coalesce(s.name, s.title, s.step, s.id) AS step,
+               coalesce(s.id, s.code, s.step_id) AS step_id
+        LIMIT 1
+        """,
+        {"alarm": alarm_name},
+    )
+    if not rows:
+        return {}
+    row = rows[0]
+    return {
+        "mode": str(row.get("mode") or "").strip(),
+        "cause": str(row.get("cause") or "").strip(),
+        "step": str(row.get("step") or "").strip(),
+        "step_id": str(row.get("step_id") or "").strip(),
+    }
+
+
 @app.before_request
 def require_login():
     endpoint = request.endpoint or ""
@@ -1064,6 +1157,7 @@ def get_models():
 @app.get("/api/status")
 def get_status():
     neo_ok = neo4j_service.available()
+    models = cloud_llm.list_models()
     return jsonify(
         {
             "neo4j": {
@@ -1072,6 +1166,14 @@ def get_status():
                 "user": neo4j_service.user,
                 "database": neo4j_service.database,
                 "error": neo4j_service.last_error,
+            },
+            "cloud_llm": {
+                "available": cloud_llm.available(),
+                #"baseUrl": cloud_llm.base_url,
+                "defaultModel": cloud_llm.default_model,
+                #"recommendedModel": cloud_llm.recommended_model(ollama_models),
+                "models": models,
+                "error": cloud_llm.last_error,
             },
         }
     )
@@ -1128,147 +1230,70 @@ def kg_node():
     return jsonify({"triplets": triplets, "nodeLabel": node_label, "csvDetails": csv_details, "error": neo4j_service.last_error})
 
 
-def _parse_numeric_series(file_text: str) -> Dict[str, List[float]]:
-    lines = [line.strip() for line in (file_text or "").splitlines() if line.strip()]
-    if not lines:
-        return {"temperature": [], "vibration": []}
-
-    has_header = any(re.search(r"[a-zA-Z\u4e00-\u9fff]", lines[0]))
-    temp_vals: List[float] = []
-    vib_vals: List[float] = []
-
-    if has_header:
-        reader = csv.DictReader(lines)
-        for row in reader:
-            for key, value in row.items():
-                if value is None:
-                    continue
-                val = str(value).strip()
-                if not val:
-                    continue
-                try:
-                    num = float(val)
-                except ValueError:
-                    continue
-                key_norm = str(key or "").lower()
-                if re.search(r"温度|temp|temperature", key_norm):
-                    temp_vals.append(num)
-                if re.search(r"振动|vibration|vib", key_norm):
-                    vib_vals.append(num)
-    else:
-        tokens = re.split(r"[\s,;\t]+", " ".join(lines))
-        for token in tokens:
-            try:
-                num = float(token)
-            except ValueError:
-                continue
-            temp_vals.append(num)
-
-    return {"temperature": temp_vals, "vibration": vib_vals}
-
-
-def _graph_root_cause(alarm_name: str) -> Dict[str, str]:
-    if not alarm_name:
-        return {"mode": "", "cause": "", "steps": ""}
-    rows = neo4j_service.run_read(
-        """
-        MATCH (p:报警码 {name: $alarm})-[r:对应]->(m:故障模式)
-        RETURN m.name AS mode
-        LIMIT 1
-        """,
-        {"alarm": alarm_name},
-    )
-    mode = str(rows[0].get("mode")) if rows else ""
-
-    cause = ""
-    steps: List[str] = []
-    if mode:
-        cause_rows = neo4j_service.run_read(
-            """
-            MATCH (m:故障模式 {name: $mode})-[r]->(c)
-            WHERE type(r) IN ["原因", "根因", "导致", "引起"]
-            RETURN coalesce(c.name, c.title, labels(c)[0]) AS cause
-            LIMIT 1
-            """,
-            {"mode": mode},
-        )
-        if cause_rows:
-            cause = str(cause_rows[0].get("cause") or "")
-
-        step_rows = neo4j_service.run_read(
-            """
-            MATCH (m:故障模式 {name: $mode})-[r:维修步骤]->(s)
-            RETURN coalesce(s.name, s.title) AS step, coalesce(s.id, s.code) AS code
-            LIMIT 3
-            """,
-            {"mode": mode},
-        )
-        for row in step_rows:
-            step_text = str(row.get("step") or "").strip()
-            code = str(row.get("code") or "").strip()
-            if step_text:
-                steps.append(f"{step_text}{f'（{code}）' if code else ''}")
-
-        if not steps:
-            kb_hits = kb.retrieve(mode, top_k=3, focus_terms=[mode])
-            for hit in kb_hits:
-                if not str(hit.get("source", "")).startswith("csv:repair_step"):
-                    continue
-                text = hit.get("text", "")
-                if text:
-                    steps.append(text)
-                if len(steps) >= 3:
-                    break
-
-    return {"mode": mode, "cause": cause, "steps": "\n".join(steps)}
-
-
 @app.post("/api/diagnose")
-def diagnose():
+def diagnose_timeseries():
     if "file" not in request.files:
-        return jsonify({"error": "未上传文件"}), 400
-    file = request.files.get("file")
+        return jsonify({"ok": False, "error": "缺少文件"}), 400
+    file = request.files["file"]
     if not file or not file.filename:
-        return jsonify({"error": "文件无效"}), 400
+        return jsonify({"ok": False, "error": "文件无效"}), 400
 
-    raw = file.read()
-    try:
-        text = raw.decode("utf-8-sig", errors="ignore")
-    except Exception:
-        text = raw.decode("utf-8", errors="ignore")
+    stats = _parse_timeseries_payload(file)
+    if not stats:
+        return jsonify({"ok": False, "error": "未解析到有效数据"}), 400
 
-    series = _parse_numeric_series(text)
-    temps = series.get("temperature") or []
-    vibs = series.get("vibration") or []
-
-    max_temp = max(temps) if temps else None
-    max_vib = max(vibs) if vibs else None
+    temp_max = stats.get("temp_max")
+    vib_max = stats.get("vib_max")
+    overall_max = stats.get("max")
 
     alarm_name = ""
-    threshold_text = []
-    if max_temp is not None:
-        if max_temp > 85:
-            alarm_name = "发电机定子温度高报警"
-            threshold_text.append(f"最高温度 {max_temp:.1f}℃ 超过 85℃ 阈值")
-    if max_vib is not None and not alarm_name:
-        if max_vib > 4.5:
-            alarm_name = "轴承振动超限报警"
-            threshold_text.append(f"最高振动 {max_vib:.2f} 超过 4.5 阈值")
+    metric_label = ""
+    threshold = None
 
-    if not threshold_text:
-        return jsonify({"result": "未检测到明显超标异常点，请补充更完整的时序数据。"})
+    if temp_max is not None:
+        metric_label = "温度"
+        threshold = 85.0
+        if temp_max > threshold:
+            alarm_name = "发电机定子温度高报警"
+    if not alarm_name and vib_max is not None:
+        metric_label = "振动"
+        threshold = 7.0
+        if vib_max > threshold:
+            alarm_name = "主轴振动超标报警"
+
+    if not alarm_name:
+        metric_label = metric_label or "数值"
+        threshold_text = "未超过预设阈值" if threshold is not None else "未检测到超标规则"
+        unit = "℃" if metric_label == "温度" else ("g" if metric_label == "振动" else "")
+        return jsonify({
+            "ok": True,
+            "summary": f"诊断结果：检测到最大{metric_label}值 {overall_max:.2f}{unit}，{threshold_text}。",
+            "data": stats,
+        })
 
     root = _graph_root_cause(alarm_name)
-    mode = root.get("mode") or "未知故障模式"
-    cause = root.get("cause") or "未知根因"
-    steps = root.get("steps") or "建议进入图谱管理完善维修步骤。"
+    fault_mode = root.get("mode") or "未在图谱中找到对应故障模式"
+    cause = root.get("cause") or "图谱未返回明确根因"
+    step = root.get("step") or "建议检查冷却与散热链路"
+    step_id = root.get("step_id")
+    step_suffix = f"（步骤编号 {step_id}）" if step_id else ""
 
-    result = (
-        f"诊断结果：在数据中发现{threshold_text[0]}。"
-        f"根据知识图谱推断，该现象很可能指向“{alarm_name}”，其根本原因可能为“{cause}”。\n"
-        f"对应故障模式：{mode}。\n维修步骤：\n{steps}"
+    metric_value = temp_max if alarm_name.startswith("发电机") else vib_max
+    metric_value = metric_value if metric_value is not None else overall_max
+    unit = "℃" if metric_label == "温度" else "g"
+    summary = (
+        f"诊断结果：在数据中发现最高{metric_label} {metric_value:.2f}{unit}，超过 {threshold:.1f}{unit} 报警阈值。"
+        f"根据知识图谱推断，该现象很可能指向“{alarm_name}”，其根本原因可能为“{fault_mode} / {cause}”。"
+        f"建议维修步骤：{step}{step_suffix}。"
     )
-    return jsonify({"result": result, "alarm": alarm_name, "mode": mode, "cause": cause})
+
+    return jsonify({
+        "ok": True,
+        "summary": summary,
+        "alarm": alarm_name,
+        "data": stats,
+        "graph": root,
+    })
 
 
 @app.post("/api/chat")
@@ -1366,15 +1391,12 @@ def chat():
         response_state = "fallback"
         llm_error = "已基于引用证据快速生成答案。"
     else:
-        model_hint = (model_name or cloud_llm.default_model or "").lower()
-        system_prompt = QWEN_SYSTEM_PROMPT if "qwen" in model_hint else DEFAULT_SYSTEM_PROMPT
         llm_raw_text = cloud_llm.chat(
             prompt_head + "\n" + llm_prompt,
             model=model_name,
             max_models_to_try=1,
             num_predict_override=llm_num_predict,
             timeout_seconds_override=llm_timeout,
-            system_prompt=system_prompt,
         )
         llm_text = (llm_raw_text or "").strip()
         cloud_http_ok = cloud_llm.last_http_ok

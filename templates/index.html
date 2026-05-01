@@ -40,7 +40,7 @@
             <label for="modelSelect">当前模型</label>
             <select id="modelSelect"></select>
           </section>
-          <section id="runtimeStatus" class="status-chip">neo4j未连接</section>
+          <section id="runtimeStatus" class="status-chip">neo4j连接中</section>
           <a class="ghost-btn" href="/logout">退出登录</a>
         </div>
       </header>
@@ -62,16 +62,16 @@
         <div id="faqList" class="faq-list"></div>
       </section>
 
-      <section class="diagnose-block">
-        <div class="diagnose-header">
-          <h2>时序数据上传诊断</h2>
-          <span>支持 csv / txt（温度、振动数据）</span>
+      <section class="qa-inline-faq-block diagnose-card">
+        <div class="faq-header">
+          <h2>时序数据诊断</h2>
+          <span class="diagnose-tip">支持 CSV / TXT 温度或振动数据</span>
         </div>
-        <div class="diagnose-actions">
+        <div class="diagnose-row">
           <input id="diagnoseFile" type="file" accept=".csv,.txt" />
-          <button id="diagnoseBtn" class="ghost-btn">开始诊断</button>
+          <button id="diagnoseBtn" class="ghost-btn">上传并诊断</button>
         </div>
-        <div id="diagnoseResult" class="diagnose-result">暂无诊断结果</div>
+        <div id="diagnoseResult" class="diagnose-result">请上传温度/振动时序文件。</div>
       </section>
 
       <section id="chatPanel" class="chat-panel" aria-live="polite"></section>

@@ -3,15 +3,12 @@ import re
 import os
 import time
 import csv
-import sqlite3
-from datetime import datetime
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
-from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 from neo4j import GraphDatabase
 
@@ -44,10 +41,6 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
-LOGIN_DEFAULT_ROLE = "admin"
-
-USER_ROLE_USER = "user"
-USER_ROLE_ADMIN = "admin"
 
 
 FAQ_POOL = [
@@ -768,7 +761,7 @@ class CloudLLMService:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -797,10 +790,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "API 返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"API 调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
@@ -816,71 +809,11 @@ KB_PATHS = [
     BASE_DIR / "data" / "wind_power_qa.md",
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
-USER_DB_PATH = BASE_DIR / "users.sqlite3"
 QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
-cloud_llm = CloudLLMService(GROQ_API_KEY, GROQ_MODEL)
-
-
-def _db_connect():
-    conn = sqlite3.connect(USER_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_user_db() -> None:
-    with _db_connect() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL,
-                phone TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-
-    seed_default_admin()
-
-
-def seed_default_admin() -> None:
-    existing = get_user_by_username(LOGIN_DEFAULT_USER)
-    if existing:
-        return
-    create_user(
-        username=LOGIN_DEFAULT_USER,
-        password=LOGIN_DEFAULT_PASSWORD,
-        role=LOGIN_DEFAULT_ROLE,
-        phone="",
-    )
-
-
-def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
-    if not username:
-        return None
-    with _db_connect() as conn:
-        cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
-        return cur.fetchone()
-
-
-def create_user(username: str, password: str, role: str, phone: str = "") -> None:
-    password_hash = generate_password_hash(password)
-    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    with _db_connect() as conn:
-        conn.execute(
-            "INSERT INTO users (username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?)",
-            (username, password_hash, role, phone, created_at),
-        )
-        conn.commit()
-
-
-init_user_db()
+cloud_llm = CloudLLMService(GROQ_API_KEY, "Qwen/Qwen3-8B")
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -966,7 +899,7 @@ def build_citation_fallback(
 @app.before_request
 def require_login():
     endpoint = request.endpoint or ""
-    if endpoint in {"login", "register", "static"}:
+    if endpoint in {"login", "static"}:
         return None
     if session.get("logged_in"):
         return None
@@ -978,45 +911,15 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
-    register_success = ""
-    register_mode = False
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
-        user = get_user_by_username(username)
-        if user and check_password_hash(user["password_hash"], password):
+        if username == LOGIN_DEFAULT_USER and password == LOGIN_DEFAULT_PASSWORD:
             session["logged_in"] = True
-            session["username"] = user["username"]
-            session["role"] = user["role"]
+            session["username"] = username
             return redirect(url_for("index"))
-        error = "用户名或密码错误。"
-    if request.args.get("register") == "ok":
-        register_success = "注册成功，请登录。"
-    if request.args.get("mode") == "register":
-        register_mode = True
-    return render_template("login.html", error=error, register_success=register_success, register_mode=register_mode)
-
-
-@app.route("/register", methods=["POST"])
-def register():
-    username = (request.form.get("username") or "").strip()
-    password = (request.form.get("password") or "").strip()
-    role = (request.form.get("role") or "").strip().lower()
-    phone = (request.form.get("phone") or "").strip()
-
-    error = ""
-    if not username or not password or not role:
-        error = "注册信息不完整，请填写用户名、密码与身份类型。"
-    elif role not in {USER_ROLE_USER, USER_ROLE_ADMIN}:
-        error = "身份类型无效，请重新选择。"
-    elif get_user_by_username(username):
-        error = "用户名已存在，请更换。"
-
-    if error:
-        return render_template("login.html", error="", register_error=error, register_mode=True)
-
-    create_user(username=username, password=password, role=role, phone=phone)
-    return redirect(url_for("login", register="ok"))
+        error = "用户名或密码错误。默认账号：admin，默认密码：123456"
+    return render_template("login.html", error=error)
 
 
 @app.get("/logout")
@@ -1027,9 +930,7 @@ def logout():
 
 @app.route("/")
 def index():
-    role = session.get("role") or USER_ROLE_USER
-    username = session.get("username") or ""
-    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN), username=username)
+    return render_template("index.html")
 
 
 @app.get("/api/faqs")
@@ -1067,7 +968,7 @@ def get_status():
                 "database": neo4j_service.database,
                 "error": neo4j_service.last_error,
             },
-            "cloud_llm": {
+            "ollama": {
                 "available": cloud_llm.available(),
                 #"baseUrl": cloud_llm.base_url,
                 "defaultModel": cloud_llm.default_model,
@@ -1187,13 +1088,7 @@ def chat():
             "【知识图谱三元组】\n" + "\n".join([f"- ({t['head']})-[{t['rel']}]->({t['tail']})" for t in kg_hits])
         )
 
-    request_mode = (payload.get("requestMode") or "").strip().lower()
-    is_kg_auto_mode = request_mode == "kg-auto"
-    is_citation_mode = bool(graph_node) and request_mode != "kg-auto"
-    allow_general = request_mode == "net"
-    kb_only = request_mode == "kb-only"
-
-    if not context_blocks and query and not allow_general:
+    if not context_blocks and query:
         return jsonify(
             {
                 "answer": "根据现有知识库与图谱，我暂时没有检索到相关内容。请补充设备名称、故障现象或关键词后重试。",
@@ -1201,15 +1096,15 @@ def chat():
             }
         )
 
-    policy_line = "请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
-    if allow_general and not context_blocks:
-        policy_line = "当前没有检索到系统证据，你可以结合通用知识回答，但需给出可执行建议。"
-
     llm_prompt = (
         f"用户问题：{query}\n\n"
         + "\n\n".join(context_blocks)
-        + "\n\n" + policy_line
+        + "\n\n请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
     )
+
+    request_mode = (payload.get("requestMode") or "").strip().lower()
+    is_kg_auto_mode = request_mode == "kg-auto"
+    is_citation_mode = bool(graph_node) and request_mode != "kg-auto"
     if is_kg_auto_mode:
         prompt_head = "你是风电设备故障诊断助手。只输出最终结论，不要分析过程。"
     elif is_citation_mode:
@@ -1305,6 +1200,5 @@ def chat():
 
 
 if __name__ == "__main__":
-    init_user_db()
     port = int(os.environ.get("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False)

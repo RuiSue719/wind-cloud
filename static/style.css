@@ -218,42 +218,6 @@ body {
   color: #9f3e17;
 }
 
-.knowledge-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #d4e2fa;
-  border-radius: 999px;
-  padding: 4px;
-  background: #f6f9ff;
-}
-
-.knowledge-toggle-compact {
-  padding: 2px;
-  gap: 2px;
-}
-
-.knowledge-toggle-compact .knowledge-btn {
-  font-size: 12px;
-  padding: 4px 8px;
-}
-
-.knowledge-btn {
-  border: none;
-  background: transparent;
-  color: #445375;
-  font-size: 13px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.knowledge-btn.active {
-  background: #3f68ff;
-  color: #fff;
-  box-shadow: 0 6px 14px rgba(63, 104, 255, 0.22);
-}
-
 .engineer-inline {
   position: absolute;
   top: 12px;
@@ -401,6 +365,60 @@ body {
 .faq-list {
   display: grid;
   gap: 6px;
+}
+
+.diagnose-block {
+  margin-top: 12px;
+  border: 1px solid #dbe6fb;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 12px;
+  flex: 0 0 auto;
+}
+
+.diagnose-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnose-header h2 {
+  font-size: 16px;
+  margin: 0;
+  color: #2c3c5e;
+}
+
+.diagnose-header span {
+  font-size: 12px;
+  color: #7a8aa7;
+}
+
+.diagnose-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.diagnose-actions input[type="file"] {
+  border: 1px solid #cfdbf3;
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: #f8fbff;
+  font-size: 13px;
+}
+
+.diagnose-result {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #2f4369;
+  background: #f8fbff;
+  border: 1px dashed #c6d5f4;
+  border-radius: 10px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
 }
 
 .faq-item {

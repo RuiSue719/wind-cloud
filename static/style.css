@@ -212,6 +212,38 @@ body {
   color: #1f6d44;
 }
 
+.status-chip.error {
+  border-color: #f1c8b7;
+  background: #fff3ec;
+  color: #9f3e17;
+}
+
+.knowledge-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d4e2fa;
+  border-radius: 999px;
+  padding: 4px;
+  background: #f6f9ff;
+}
+
+.knowledge-btn {
+  border: none;
+  background: transparent;
+  color: #445375;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.knowledge-btn.active {
+  background: #3f68ff;
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(63, 104, 255, 0.22);
+}
+
 .engineer-inline {
   position: absolute;
   top: 12px;

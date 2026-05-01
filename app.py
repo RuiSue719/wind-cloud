@@ -40,7 +40,7 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # 移除 OLLAMA 相关的环境变量，添加 GROQ
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "Qwen/Qwen3-8B")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
@@ -763,12 +763,12 @@ class CloudLLMService:
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
     ) -> Optional[str]:
-        """调用 Groq API（OpenAI 兼容）"""
+        """调用API"""
         if not self.api_key:
-            self.last_error = "未配置 GROQ_API_KEY"
+            self.last_error = "未配置API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -797,10 +797,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:

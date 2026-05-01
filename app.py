@@ -16,19 +16,7 @@ from neo4j import GraphDatabase
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET_KEY", "windpower-demo-secret")
 
-'''
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
-OLLAMA_FORCE_CPU = os.getenv("OLLAMA_FORCE_CPU", "1").strip().lower() not in {"0", "false", "no"}
-OLLAMA_NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", str(max(2, (os.cpu_count() or 4) - 1))))
-OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "0" if OLLAMA_FORCE_CPU else "1"))
-'''
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
@@ -37,7 +25,7 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
-SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "llama-3.3-70b-versatile")
+SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"

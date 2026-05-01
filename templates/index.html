@@ -120,12 +120,12 @@
         <label class="action-btn" for="imageInput" title="上传图片">🖼</label>
         <input id="imageInput" type="file" accept="image/*" hidden />
 
-        <section class="knowledge-toggle knowledge-toggle-compact" id="knowledgeToggle">
-          <button class="knowledge-btn active" type="button" data-mode="local">仅系统知识库</button>
-          <button class="knowledge-btn" type="button" data-mode="open">结合网络知识</button>
-        </section>
         <button id="voiceBtn" class="action-btn" title="语音输入">🎤</button>
-        <button id="sendBtn" class="send-btn" title="发送">➤</button>
+        <div class="knowledge-toggle" aria-label="知识来源选择">
+          <button id="kbOnlyBtn" class="knowledge-btn" type="button">仅系统知识库</button>
+          <button id="netAssistBtn" class="knowledge-btn" type="button">结合网络知识</button>
+          <button id="sendBtn" class="send-btn" title="发送">➤</button>
+        </div>
       </div>
       </footer>
     </div>

@@ -40,7 +40,11 @@
             <label for="modelSelect">当前模型</label>
             <select id="modelSelect"></select>
           </section>
-          <section id="runtimeStatus" class="status-chip">neo4j,ollama连接中</section>
+          <section class="knowledge-toggle" id="knowledgeToggle">
+            <button class="knowledge-btn active" type="button" data-mode="local">仅系统知识库</button>
+            <button class="knowledge-btn" type="button" data-mode="open">结合网络知识</button>
+          </section>
+          <section id="runtimeStatus" class="status-chip">neo4j连接中</section>
           <a class="ghost-btn" href="/logout">退出登录</a>
         </div>
       </header>

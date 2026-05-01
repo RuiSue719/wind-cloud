@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>登录 - 风电设备故障检测一体化问答系统</title>
+  <title>登录 - 风电设备故障诊断一体化问答系统</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
@@ -12,7 +12,7 @@
 <body>
   <main class="login-shell">
     <section class="login-hero">
-      <h1>风脉智诊：基于知识图谱增强生成的风电设备故障诊断问答系统</h1>
+      <h1>风诊智答——风电设备故障诊断一体化问答系</h1>
       <p>面向风电运维场景的轻量化智能问答解决方案</p>
 
       <h3 class="login-section-title">系统功能模块</h3>
@@ -47,10 +47,31 @@
       {% if error %}
       <div class="login-error">{{ error }}</div>
       {% endif %}
+      {% if register_success %}
+      <div class="login-error" style="border-color:#c5e9d7;background:#effaf4;color:#1b6b46;">{{ register_success }}</div>
+      {% endif %}
       <form method="post" class="login-form">
         <input name="username" type="text" placeholder="请输入用户名" required />
         <input name="password" type="password" placeholder="请输入密码" required />
         <button type="submit" class="login-btn">立即登录</button>
+      </form>
+
+      <div style="height:16px"></div>
+      <h2 style="font-size:26px;">用户注册</h2>
+      <p class="login-tip">身份类型将决定可见功能</p>
+      {% if register_error %}
+      <div class="login-error">{{ register_error }}</div>
+      {% endif %}
+      <form method="post" action="/register" class="login-form">
+        <input name="username" type="text" placeholder="用户名（登录凭证）" required />
+        <input name="password" type="password" placeholder="密码（安全认证）" required />
+        <select name="role" required style="border:1px solid #d2ddf6;border-radius:12px;background:#fff;padding:12px;font-size:15px;">
+          <option value="" disabled selected>请选择身份类型（必选）</option>
+          <option value="user">现场运维工程师（普通用户）</option>
+          <option value="admin">诊断专家 / 管理者（管理员）</option>
+        </select>
+        <input name="phone" type="text" placeholder="联系电话（可选）" />
+        <button type="submit" class="login-btn">立即注册</button>
       </form>
     </section>
   </main>

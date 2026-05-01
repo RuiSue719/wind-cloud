@@ -8,6 +8,7 @@ const historySplitter = document.getElementById("historySplitter");
 const topbarModelBlock = document.getElementById("topbarModelBlock");
 const composer = document.getElementById("composer");
 const runtimeStatus = document.getElementById("runtimeStatus");
+const knowledgeToggle = document.getElementById("knowledgeToggle");
 const historyList = document.getElementById("historyList");
 const newChatBtn = document.getElementById("newChatBtn");
 
@@ -56,6 +57,7 @@ let graphNodesCache = [];
 let graphEdgesCache = [];
 let pinnedNodeId = null;
 let isVoiceListening = false;
+let knowledgeMode = "local";
 
 const CHAT_STORAGE_BASE = "industrial_qa_history_v1";
 const activeUsername = document.body?.dataset?.username || "guest";
@@ -261,16 +263,17 @@ function renderStatus() {
   }
   if (!lastStatus) {
     runtimeStatus.className = "status-chip";
-    runtimeStatus.textContent = "neo4j,ollama连接中";
+    runtimeStatus.textContent = "neo4j连接中";
     return;
   }
 
   const neo = lastStatus.neo4j || {};
-  const oll = lastStatus.ollama || {};
-  const ok = neo.available && oll.available;
+  const ok = !!neo.available;
 
-  runtimeStatus.className = `status-chip ${ok ? "ok" : ""}`;
-  runtimeStatus.textContent = ok ? "neo4j,ollama已连接" : "neo4j,ollama未连接";
+  runtimeStatus.className = `status-chip ${ok ? "ok" : "error"}`;
+  runtimeStatus.textContent = ok
+    ? "neo4j已连接"
+    : "neo4j未连接，请进入图谱可视化连接neo4j";
   if (kgConnPanel) {
     kgConnPanel.style.display = ok ? "none" : "grid";
   }
@@ -534,6 +537,7 @@ async function sendMessageWithOptions(prefill = "", options = {}) {
     model: options.model || modelSelect.value,
     source: options.source || "manual",
     requestMode: options.requestMode || "normal",
+    knowledgeMode: knowledgeMode,
     graphNode: activeCitation?.label || "",
     graphTriplets: Array.isArray(activeCitation?.triplets) ? activeCitation.triplets : [],
   };
@@ -1118,6 +1122,19 @@ async function connectNeo4j() {
 }
 
 newChatBtn?.addEventListener("click", () => createNewSession(true));
+
+if (knowledgeToggle) {
+  knowledgeToggle.addEventListener("click", (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest(".knowledge-btn") : null;
+    if (!btn) {
+      return;
+    }
+    knowledgeMode = btn.dataset.mode || "local";
+    knowledgeToggle.querySelectorAll(".knowledge-btn").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+    });
+  });
+}
 
 moduleTabs.forEach((tab) => {
   tab.addEventListener("click", () => switchModule(tab.dataset.target));

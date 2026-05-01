@@ -763,12 +763,12 @@ class CloudLLMService:
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
     ) -> Optional[str]:
-        """调用硅基流动 API（OpenAI 兼容）"""
+        """调用 Groq API（OpenAI 兼容）"""
         if not self.api_key:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = os.environ.get("GROQ_BASE_URL", "https://api.siliconflow.cn/v1/chat/completions")
+        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -797,10 +797,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "硅基流动返回空内容"
+            self.last_error = "Groq 返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"硅基流动调用失败: {exc}"
+            self.last_error = f"Groq 调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
@@ -1136,7 +1136,6 @@ def chat():
     message = payload.get("message", "")
     image_name = payload.get("imageName", "")
     model_name = payload.get("model", "")
-    knowledge_mode = (payload.get("knowledgeMode") or "local").strip().lower()
     graph_node = (payload.get("graphNode") or "").strip()
     graph_triplets_payload = payload.get("graphTriplets") or []
 
@@ -1188,7 +1187,13 @@ def chat():
             "【知识图谱三元组】\n" + "\n".join([f"- ({t['head']})-[{t['rel']}]->({t['tail']})" for t in kg_hits])
         )
 
-    if not context_blocks and query and knowledge_mode != "open":
+    request_mode = (payload.get("requestMode") or "").strip().lower()
+    is_kg_auto_mode = request_mode == "kg-auto"
+    is_citation_mode = bool(graph_node) and request_mode != "kg-auto"
+    allow_general = request_mode == "net"
+    kb_only = request_mode == "kb-only"
+
+    if not context_blocks and query and not allow_general:
         return jsonify(
             {
                 "answer": "根据现有知识库与图谱，我暂时没有检索到相关内容。请补充设备名称、故障现象或关键词后重试。",
@@ -1196,27 +1201,21 @@ def chat():
             }
         )
 
-    if context_blocks:
-        llm_prompt = (
-            f"用户问题：{query}\n\n"
-            + "\n\n".join(context_blocks)
-            + "\n\n请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
-        )
-    else:
-        llm_prompt = f"用户问题：{query}\n\n若需要，可结合通用知识给出简洁、可执行的建议。"
+    policy_line = "请仅根据以上上下文回答。若信息不足请明确指出缺口，并给出下一步需要补充的数据。"
+    if allow_general and not context_blocks:
+        policy_line = "当前没有检索到系统证据，你可以结合通用知识回答，但需给出可执行建议。"
 
-    request_mode = (payload.get("requestMode") or "").strip().lower()
-    is_kg_auto_mode = request_mode == "kg-auto"
-    is_citation_mode = bool(graph_node) and request_mode != "kg-auto"
+    llm_prompt = (
+        f"用户问题：{query}\n\n"
+        + "\n\n".join(context_blocks)
+        + "\n\n" + policy_line
+    )
     if is_kg_auto_mode:
         prompt_head = "你是风电设备故障诊断助手。只输出最终结论，不要分析过程。"
     elif is_citation_mode:
         prompt_head = "你是风电设备维护助手。必须在100字内给出完整结论，不要输出推理过程。"
     else:
-        if knowledge_mode == "open":
-            prompt_head = "你是工业设备故障问答助手。可结合通用知识与提供的上下文，结论简洁、可执行。"
-        else:
-            prompt_head = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
+        prompt_head = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
 
     llm_num_predict = 220 if is_citation_mode else (256 if is_kg_auto_mode else None)
     llm_timeout = 180 if is_citation_mode else (180 if is_kg_auto_mode else None)

@@ -979,6 +979,7 @@ def require_login():
 def login():
     error = ""
     register_success = ""
+    register_mode = False
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
@@ -991,7 +992,9 @@ def login():
         error = "用户名或密码错误。"
     if request.args.get("register") == "ok":
         register_success = "注册成功，请登录。"
-    return render_template("login.html", error=error, register_success=register_success)
+    if request.args.get("mode") == "register":
+        register_mode = True
+    return render_template("login.html", error=error, register_success=register_success, register_mode=register_mode)
 
 
 @app.route("/register", methods=["POST"])
@@ -1010,7 +1013,7 @@ def register():
         error = "用户名已存在，请更换。"
 
     if error:
-        return render_template("login.html", error="", register_error=error)
+        return render_template("login.html", error="", register_error=error, register_mode=True)
 
     create_user(username=username, password=password, role=role, phone=phone)
     return redirect(url_for("login", register="ok"))
@@ -1025,7 +1028,8 @@ def logout():
 @app.route("/")
 def index():
     role = session.get("role") or USER_ROLE_USER
-    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN))
+    username = session.get("username") or ""
+    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN), username=username)
 
 
 @app.get("/api/faqs")

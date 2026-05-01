@@ -40,10 +40,6 @@
             <label for="modelSelect">当前模型</label>
             <select id="modelSelect"></select>
           </section>
-          <section class="knowledge-toggle" id="knowledgeToggle">
-            <button class="knowledge-btn active" type="button" data-mode="local">仅系统知识库</button>
-            <button class="knowledge-btn" type="button" data-mode="open">结合网络知识</button>
-          </section>
           <section id="runtimeStatus" class="status-chip">neo4j连接中</section>
           <a class="ghost-btn" href="/logout">退出登录</a>
         </div>
@@ -124,6 +120,10 @@
         <label class="action-btn" for="imageInput" title="上传图片">🖼</label>
         <input id="imageInput" type="file" accept="image/*" hidden />
 
+        <section class="knowledge-toggle knowledge-toggle-compact" id="knowledgeToggle">
+          <button class="knowledge-btn active" type="button" data-mode="local">仅系统知识库</button>
+          <button class="knowledge-btn" type="button" data-mode="open">结合网络知识</button>
+        </section>
         <button id="voiceBtn" class="action-btn" title="语音输入">🎤</button>
         <button id="sendBtn" class="send-btn" title="发送">➤</button>
       </div>

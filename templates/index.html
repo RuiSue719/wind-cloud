@@ -15,8 +15,10 @@
       <div class="module-sidebar-title">功能导航</div>
       <button class="side-nav-item active" data-target="qaModule">智能问答</button>
       <button class="side-nav-item" data-target="kgModule">图谱可视化</button>
+      {% if is_admin %}
       <button class="side-nav-item" data-target="kgManageModule">图谱管理</button>
       <button class="side-nav-item" data-target="caseModule">诊断案例</button>
+      {% endif %}
     </aside>
 
     <div id="moduleSplitter" class="col-splitter module-splitter" title="拖拽调节宽度"></div>
@@ -45,7 +47,7 @@
 
       <main id="qaModule" class="content module active">
       <aside class="engineer-inline" aria-label="Q版女性工程师形象">
-        <img src="{{ url_for('static', filename='assets/engineer2.png') }}" alt="Q版女性工程师" onerror="this.onerror=null;this.src='{{ url_for('static', filename='assets/engineer.png') }}';" />
+        <img src="{{ url_for('static', filename='assets/engineer2.png') }}" alt="Q版女性工程师" data-fallback="{{ url_for('static', filename='assets/engineer.png') }}" onerror="this.onerror=null;this.src=this.dataset.fallback;" />
       </aside>
       <section class="welcome-card">
         <h1>Hi，欢迎来到风电设备故障诊断一体化问答系统</h1>
@@ -94,6 +96,7 @@
       <section id="tripletList" class="triplet-list"></section>
       </main>
 
+      {% if is_admin %}
       <main id="kgManageModule" class="content module">
       <section class="welcome-card">
         <h1>图谱管理</h1>
@@ -107,6 +110,7 @@
         <p>沉淀典型故障案例与排查路径（当前版本提供占位模块，可继续扩展）。</p>
       </section>
       </main>
+      {% endif %}
 
       <footer id="composer" class="composer">
       <div id="citationBar" class="citation-bar hidden"></div>

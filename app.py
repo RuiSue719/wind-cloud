@@ -763,12 +763,12 @@ class CloudLLMService:
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
     ) -> Optional[str]:
-        """调用 Groq API（OpenAI 兼容）"""
+        """调用硅基流动 API（OpenAI 兼容）"""
         if not self.api_key:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = os.environ.get("GROQ_BASE_URL", "https://api.siliconflow.cn/v1/chat/completions")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -797,10 +797,10 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "硅基流动返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"硅基流动调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:

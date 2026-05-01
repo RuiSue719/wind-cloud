@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>风电设备故障诊断一体化问答系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700,800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body data-username="{{ username }}">
+  <div id="appShell" class="app-shell with-sidebar">
+    <aside class="module-sidebar">
+      <div class="module-sidebar-title">功能导航</div>
+      <button class="side-nav-item active" data-target="qaModule">智能问答</button>
+      <button class="side-nav-item" data-target="kgModule">图谱可视化</button>
+      {% if is_admin %}
+      <button class="side-nav-item" data-target="kgManageModule">图谱管理</button>
+      <button class="side-nav-item" data-target="caseModule">诊断案例</button>
+      {% endif %}
+    </aside>
+
+    <div id="moduleSplitter" class="col-splitter module-splitter" title="拖拽调节宽度"></div>
+
+    <aside id="historySidebar" class="history-sidebar">
+      <div class="history-header">
+        <h2>历史聊天</h2>
+        <button id="newChatBtn" class="ghost-btn">新建</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </aside>
+
+    <div id="historySplitter" class="col-splitter" title="拖拽调节宽度"></div>
+
+    <div class="main-panel">
+      <header class="topbar">
+        <div class="topbar-right">
+          <section id="topbarModelBlock" class="model-block topbar-model-block">
+            <label for="modelSelect">当前模型</label>
+            <select id="modelSelect"></select>
+          </section>
+          <section class="knowledge-toggle" id="knowledgeToggle">
+            <button class="knowledge-btn active" type="button" data-mode="local">仅系统知识库</button>
+            <button class="knowledge-btn" type="button" data-mode="open">结合网络知识</button>
+          </section>
+          <section id="runtimeStatus" class="status-chip">neo4j连接中</section>
+          <a class="ghost-btn" href="/logout">退出登录</a>
+        </div>
+      </header>
+
+      <main id="qaModule" class="content module active">
+      <aside class="engineer-inline" aria-label="Q版女性工程师形象">
+        <!-- 已修改为你要的头像路径 -->
+        <img src="{{ url_for('static', filename='assets/engineer.png') }}" alt="工程师形象" />
+      </aside>
+      <section class="welcome-card">
+        <h1>Hi，欢迎来到风电设备故障诊断一体化问答系统</h1>
+        <p>你可以直接提问，或点击下方高频问题快速获取答案。</p>
+      </section>
+
+      <section class="faq-block qa-inline-faq-block">
+        <div class="faq-header">
+          <h2>你可能想问这些问题</h2>
+          <button id="refreshFaqBtn" class="ghost-btn">换一批</button>
+        </div>
+        <div id="faqList" class="faq-list"></div>
+      </section>
+
+      <section id="chatPanel" class="chat-panel" aria-live="polite"></section>
+      </main>
+
+      <main id="kgModule" class="content module">
+      <section class="welcome-card">
+        <h1>风电知识图谱可视化</h1>
+        <p>图谱来自 Neo4j，支持关系浏览与关键词三元组检索。</p>
+      </section>
+
+      <section id="kgConnPanel" class="kg-conn">
+        <input id="neo4jUri" type="text" placeholder="Neo4j URI，例如 bolt://127.0.0.1:7687" />
+        <input id="neo4jUser" type="text" placeholder="用户名" />
+        <input id="neo4jPassword" type="password" placeholder="密码" />
+        <input id="neo4jDatabase" type="text" placeholder="数据库名" />
+        <button id="neo4jConnectBtn" class="ghost-btn">连接Neo4j</button>
+      </section>
+
+      <section class="kg-toolbar">
+        <input id="kgKeyword" type="text" placeholder="输入关键词检索三元组，如：轴承、故障、温度" />
+        <button id="kgSearchBtn" class="ghost-btn">检索</button>
+        <button id="kgReloadBtn" class="ghost-btn">刷新图谱</button>
+      </section>
+
+      <section class="graph-wrap">
+        <section id="graphCanvas" class="graph-canvas"></section>
+        <div class="graph-zoom-controls">
+          <button id="graphZoomInBtn" class="graph-zoom-btn" type="button">+</button>
+          <button id="graphZoomOutBtn" class="graph-zoom-btn" type="button">-</button>
+        </div>
+        <button id="graphHoverAction" class="graph-hover-action hidden" type="button">双击查看详情</button>
+      </section>
+      <section id="tripletList" class="triplet-list"></section>
+      </main>
+
+      {% if is_admin %}
+      <main id="kgManageModule" class="content module">
+      <section class="welcome-card">
+        <h1>图谱管理</h1>
+        <p>用于维护图谱节点、关系和同步任务（当前版本提供占位模块，可继续扩展）。</p>
+      </section>
+      </main>
+
+      <main id="caseModule" class="content module">
+      <section class="welcome-card">
+        <h1>诊断案例</h1>
+        <p>沉淀典型故障案例与排查路径（当前版本提供占位模块，可继续扩展）。</p>
+      </section>
+      </main>
+      {% endif %}
+
+      <footer id="composer" class="composer">
+      <div id="citationBar" class="citation-bar hidden"></div>
+      <div id="imagePreview" class="image-preview hidden"></div>
+      <textarea id="messageInput" placeholder="请输入文本，或上传图片后提问..." rows="2"></textarea>
+      <div class="composer-actions">
+        <label class="action-btn" for="imageInput" title="上传图片">🖼</label>
+        <input id="imageInput" type="file" accept="image/*" hidden />
+
+        <button id="voiceBtn" class="action-btn" title="语音输入">🎤</button>
+        <button id="sendBtn" class="send-btn" title="发送">➤</button>
+      </div>
+      </footer>
+    </div>
+  </div>
+
+  <section id="nodeDetailModal" class="node-detail-modal hidden" aria-label="节点详情弹窗">
+    <div class="node-detail-header">
+      <h3 id="nodeDetailTitle">节点详情</h3>
+      <div class="node-detail-actions">
+        <button id="nodeDetailShrinkBtn" class="size-arrow-btn" type="button" title="缩小">↙</button>
+        <button id="nodeDetailGrowBtn" class="size-arrow-btn" type="button" title="放大">↗</button>
+        <button id="nodeDetailCloseBtn" class="ghost-btn" type="button">关闭</button>
+      </div>
+    </div>
+    <div id="nodeDetailBody" class="node-detail-body"></div>
+  </section>
+
+  <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

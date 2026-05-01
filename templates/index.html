@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body>
+<body data-username="{{ username }}">
   <div id="appShell" class="app-shell with-sidebar">
     <aside class="module-sidebar">
       <div class="module-sidebar-title">功能导航</div>

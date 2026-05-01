@@ -8,7 +8,6 @@ const historySplitter = document.getElementById("historySplitter");
 const topbarModelBlock = document.getElementById("topbarModelBlock");
 const composer = document.getElementById("composer");
 const runtimeStatus = document.getElementById("runtimeStatus");
-const knowledgeToggle = document.getElementById("knowledgeToggle");
 const historyList = document.getElementById("historyList");
 const newChatBtn = document.getElementById("newChatBtn");
 
@@ -43,6 +42,9 @@ const nodeDetailShrinkBtn = document.getElementById("nodeDetailShrinkBtn");
 const nodeDetailGrowBtn = document.getElementById("nodeDetailGrowBtn");
 const nodeDetailCloseBtn = document.getElementById("nodeDetailCloseBtn");
 const kgConnPanel = document.getElementById("kgConnPanel");
+const diagnoseFile = document.getElementById("diagnoseFile");
+const diagnoseBtn = document.getElementById("diagnoseBtn");
+const diagnoseResult = document.getElementById("diagnoseResult");
 
 let selectedImage = null;
 let recognition = null;
@@ -57,7 +59,6 @@ let graphNodesCache = [];
 let graphEdgesCache = [];
 let pinnedNodeId = null;
 let isVoiceListening = false;
-let knowledgeMode = "local";
 
 const CHAT_STORAGE_BASE = "industrial_qa_history_v1";
 const activeUsername = document.body?.dataset?.username || "guest";
@@ -263,16 +264,16 @@ function renderStatus() {
   }
   if (!lastStatus) {
     runtimeStatus.className = "status-chip";
-    runtimeStatus.textContent = "neo4j连接中";
+    runtimeStatus.textContent = "neo4j未连接";
     return;
   }
 
   const neo = lastStatus.neo4j || {};
-  const ok = !!neo.available;
+  const ok = neo.available;
 
   runtimeStatus.className = `status-chip ${ok ? "ok" : "error"}`;
   runtimeStatus.textContent = ok
-    ? "neo4j已连接"
+    ? "neo4j连接成功"
     : "neo4j未连接，请进入图谱可视化连接neo4j";
   if (kgConnPanel) {
     kgConnPanel.style.display = ok ? "none" : "grid";
@@ -347,6 +348,48 @@ async function loadStatus() {
     lastStatus = null;
   }
   renderStatus();
+}
+
+async function runDiagnose() {
+  if (!diagnoseFile || !diagnoseFile.files || diagnoseFile.files.length === 0) {
+    if (diagnoseResult) {
+      diagnoseResult.textContent = "请先选择 csv/txt 文件后再诊断。";
+    }
+    return;
+  }
+  const file = diagnoseFile.files[0];
+  const formData = new FormData();
+  formData.append("file", file);
+  if (diagnoseResult) {
+    diagnoseResult.textContent = "正在诊断，请稍候...";
+  }
+  try {
+    const res = await fetch("/api/diagnose", {
+      method: "POST",
+      body: formData,
+    });
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      if (diagnoseResult) {
+        diagnoseResult.textContent = data.error;
+      }
+      return;
+    }
+    const text = data.result || "诊断完成，但未返回结果。";
+    if (diagnoseResult) {
+      diagnoseResult.textContent = text;
+    }
+    appendMessage("bot", text, []);
+    addSessionMessage("bot", text, [], null);
+  } catch (e) {
+    if (diagnoseResult) {
+      diagnoseResult.textContent = "诊断失败，请检查服务状态或文件格式。";
+    }
+  }
 }
 
 function ensureEvidencePanel() {
@@ -537,7 +580,6 @@ async function sendMessageWithOptions(prefill = "", options = {}) {
     model: options.model || modelSelect.value,
     source: options.source || "manual",
     requestMode: options.requestMode || "normal",
-    knowledgeMode: knowledgeMode,
     graphNode: activeCitation?.label || "",
     graphTriplets: Array.isArray(activeCitation?.triplets) ? activeCitation.triplets : [],
   };
@@ -1123,19 +1165,6 @@ async function connectNeo4j() {
 
 newChatBtn?.addEventListener("click", () => createNewSession(true));
 
-if (knowledgeToggle) {
-  knowledgeToggle.addEventListener("click", (e) => {
-    const btn = e.target && e.target.closest ? e.target.closest(".knowledge-btn") : null;
-    if (!btn) {
-      return;
-    }
-    knowledgeMode = btn.dataset.mode || "local";
-    knowledgeToggle.querySelectorAll(".knowledge-btn").forEach((b) => {
-      b.classList.toggle("active", b === btn);
-    });
-  });
-}
-
 moduleTabs.forEach((tab) => {
   tab.addEventListener("click", () => switchModule(tab.dataset.target));
 });
@@ -1183,6 +1212,7 @@ imageInput?.addEventListener("change", (e) => {
 
 kgSearchBtn?.addEventListener("click", searchTriplets);
 kgReloadBtn?.addEventListener("click", loadGraph);
+diagnoseBtn?.addEventListener("click", runDiagnose);
 tripletList?.addEventListener("click", (e) => {
   const item = e.target && e.target.closest ? e.target.closest(".triplet-item") : null;
   if (!item || !item.textContent) {

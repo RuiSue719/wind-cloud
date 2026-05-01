@@ -3,12 +3,15 @@ import re
 import os
 import time
 import csv
+import sqlite3
+from datetime import datetime
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 from neo4j import GraphDatabase
 
@@ -41,6 +44,10 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
+LOGIN_DEFAULT_ROLE = "admin"
+
+USER_ROLE_USER = "user"
+USER_ROLE_ADMIN = "admin"
 
 
 FAQ_POOL = [
@@ -761,7 +768,7 @@ class CloudLLMService:
             self.last_error = "未配置 GROQ_API_KEY"
             return None
 
-        url = "https://api.siliconflow.cn/v1/chat/completions"
+        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -809,11 +816,71 @@ KB_PATHS = [
     BASE_DIR / "data" / "wind_power_qa.md",
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
+USER_DB_PATH = BASE_DIR / "users.sqlite3"
 QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
 cloud_llm = CloudLLMService(GROQ_API_KEY, GROQ_MODEL)
+
+
+def _db_connect():
+    conn = sqlite3.connect(USER_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_user_db() -> None:
+    with _db_connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                phone TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+    seed_default_admin()
+
+
+def seed_default_admin() -> None:
+    existing = get_user_by_username(LOGIN_DEFAULT_USER)
+    if existing:
+        return
+    create_user(
+        username=LOGIN_DEFAULT_USER,
+        password=LOGIN_DEFAULT_PASSWORD,
+        role=LOGIN_DEFAULT_ROLE,
+        phone="",
+    )
+
+
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    if not username:
+        return None
+    with _db_connect() as conn:
+        cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+        return cur.fetchone()
+
+
+def create_user(username: str, password: str, role: str, phone: str = "") -> None:
+    password_hash = generate_password_hash(password)
+    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _db_connect() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, role, phone, created_at),
+        )
+        conn.commit()
+
+
+init_user_db()
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -899,7 +966,7 @@ def build_citation_fallback(
 @app.before_request
 def require_login():
     endpoint = request.endpoint or ""
-    if endpoint in {"login", "static"}:
+    if endpoint in {"login", "register", "static"}:
         return None
     if session.get("logged_in"):
         return None
@@ -911,15 +978,42 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
+    register_success = ""
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
-        if username == LOGIN_DEFAULT_USER and password == LOGIN_DEFAULT_PASSWORD:
+        user = get_user_by_username(username)
+        if user and check_password_hash(user["password_hash"], password):
             session["logged_in"] = True
-            session["username"] = username
+            session["username"] = user["username"]
+            session["role"] = user["role"]
             return redirect(url_for("index"))
-        error = "用户名或密码错误。默认账号：admin，默认密码：123456"
-    return render_template("login.html", error=error)
+        error = "用户名或密码错误。"
+    if request.args.get("register") == "ok":
+        register_success = "注册成功，请登录。"
+    return render_template("login.html", error=error, register_success=register_success)
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    username = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "").strip()
+    role = (request.form.get("role") or "").strip().lower()
+    phone = (request.form.get("phone") or "").strip()
+
+    error = ""
+    if not username or not password or not role:
+        error = "注册信息不完整，请填写用户名、密码与身份类型。"
+    elif role not in {USER_ROLE_USER, USER_ROLE_ADMIN}:
+        error = "身份类型无效，请重新选择。"
+    elif get_user_by_username(username):
+        error = "用户名已存在，请更换。"
+
+    if error:
+        return render_template("login.html", error="", register_error=error)
+
+    create_user(username=username, password=password, role=role, phone=phone)
+    return redirect(url_for("login", register="ok"))
 
 
 @app.get("/logout")
@@ -930,7 +1024,8 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    role = session.get("role") or USER_ROLE_USER
+    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN))
 
 
 @app.get("/api/faqs")
@@ -1200,5 +1295,6 @@ def chat():
 
 
 if __name__ == "__main__":
+    init_user_db()
     port = int(os.environ.get("PORT", 7860))
     app.run(host="0.0.0.0", port=port, debug=False)

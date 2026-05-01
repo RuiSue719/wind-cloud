@@ -1,6 +1,9 @@
 import random
 import re
 import os
+import ssl
+# 强制使用系统默认的CA证书，解决Railway容器内HTTPS连接异常崩溃问题
+ssl._create_default_https_context = ssl._create_unverified_context
 import time
 import csv
 import sqlite3
@@ -38,7 +41,7 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-# 移除 OLLAMA 相关的环境变量，添加 GROQ
+# 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW_API_KEY
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 
@@ -596,156 +599,7 @@ class Neo4jService:
             return ""
         return str(rows[0].get("label") or "").strip()
 
-'''
-class OllamaService:
-    def __init__(self, base_url: str, default_model: str, timeout_seconds: int) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.default_model = default_model
-        self.last_error = ""
-        self.timeout_seconds = max(8, timeout_seconds)
-        self.force_cpu = OLLAMA_FORCE_CPU
-        self.num_thread = max(1, OLLAMA_NUM_THREAD)
-        self.num_gpu = max(0, OLLAMA_NUM_GPU)
-        self.last_http_ok = False
-        self.last_model = default_model
 
-    def update_config(self, base_url: str = "", default_model: str = "") -> None:
-        if base_url:
-            self.base_url = base_url.rstrip("/")
-        if default_model:
-            self.default_model = default_model
-        self.last_error = ""
-
-    @staticmethod
-    def _model_rank(model_name: str) -> float:
-        text = (model_name or "").lower()
-        match = re.search(r":(?:[a-z]+)?(\d+)b", text)
-        if match:
-            return float(match.group(1))
-        if "e2b" in text:
-            return 2.0
-        if "1b" in text:
-            return 1.0
-        return 999.0
-
-    @staticmethod
-    def _thinking_to_brief(thinking_text: str, max_points: int = 3) -> str:
-        raw = (thinking_text or "").strip()
-        if not raw:
-            return ""
-        lines = re.split(r"[\n。；;]+", raw)
-        points: List[str] = []
-        for line in lines:
-            clean = re.sub(r"^[\-\*\d\s\.:：]+", "", line).strip()
-            clean = re.sub(r"\s+", " ", clean)
-            if len(clean) < 8:
-                continue
-            if clean not in points:
-                points.append(clean)
-            if len(points) >= max_points:
-                break
-        if not points:
-            raw = re.sub(r"\s+", " ", raw)
-            return f"1. {raw[:90]}"
-        return "\n".join([f"{i + 1}. {p[:60]}" for i, p in enumerate(points)])
-
-    def recommended_model(self, models: Optional[List[str]] = None) -> str:
-        candidates = models or self.list_models()
-        if not candidates:
-            return self.default_model
-        return sorted(candidates, key=self._model_rank)[0]
-
-    def chat(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        system_prompt: str = "",
-        max_models_to_try: int = 3,
-        num_predict_override: Optional[int] = None,
-        timeout_seconds_override: Optional[int] = None,
-    ) -> Optional[str]:
-        self.last_http_ok = False
-        available_models = self.list_models()
-        selected_model = model or self.default_model
-        if available_models and selected_model not in available_models:
-            selected_model = self.recommended_model(available_models)
-
-        max_try = max(1, min(int(max_models_to_try or 1), 3))
-        request_timeout = max(8, int(timeout_seconds_override or self.timeout_seconds))
-
-        candidate_models: List[str] = []
-        for name in [selected_model, self.recommended_model(available_models) if available_models else ""]:
-            if name and name not in candidate_models:
-                candidate_models.append(name)
-        for name in available_models:
-            if name not in candidate_models:
-                candidate_models.append(name)
-
-        payload = {
-            "stream": False,
-            "keep_alive": "30m",
-            "options": {
-                "num_predict": int(num_predict_override or 512),
-                "temperature": 0.2,
-                "top_p": 0.9,
-            },
-            "messages": [
-                {"role": "system", "content": system_prompt or "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"},
-                {"role": "user", "content": prompt},
-            ],
-        }
-
-        if self.force_cpu:
-            payload["options"]["num_gpu"] = 0
-            payload["options"]["num_thread"] = self.num_thread
-            payload["options"]["low_vram"] = True
-        elif self.num_gpu >= 0:
-            payload["options"]["num_gpu"] = self.num_gpu
-
-        last_exc: Optional[Exception] = None
-        tried_models: List[str] = []
-        for candidate in candidate_models[:max_try]:
-            tried_models.append(candidate)
-            self.last_model = candidate
-            payload["model"] = candidate
-            try:
-                res = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=request_timeout)
-                res.raise_for_status()
-                self.last_http_ok = True
-                data = res.json()
-                text = ((data.get("message") or {}).get("content") or "").strip()
-                if text:
-                    self.last_error = ""
-                    return text
-                thinking = ((data.get("message") or {}).get("thinking") or "").strip()
-                # Some models can return HTTP 200 with empty content; retry next candidate model.
-                done_reason = data.get("done_reason") or "unknown"
-                self.last_error = f"{candidate}: 响应为空（done_reason={done_reason}），尝试后备模型"
-                continue
-            except Exception as exc:
-                last_exc = exc
-                self.last_error = f"{candidate}: {exc}"
-
-        if last_exc is not None:
-            self.last_error = f"已尝试模型 {', '.join(tried_models)}，最后错误：{last_exc}"
-        elif tried_models:
-            self.last_error = f"已尝试模型 {', '.join(tried_models)}，均返回空内容"
-        return None
-
-    def list_models(self) -> List[str]:
-        try:
-            res = requests.get(f"{self.base_url}/api/tags", timeout=8)
-            res.raise_for_status()
-            data = res.json()
-            self.last_error = ""
-            return [m.get("name") for m in data.get("models", []) if m.get("name")]
-        except Exception as exc:
-            self.last_error = str(exc)
-            return []
-
-    def available(self) -> bool:
-        return len(self.list_models()) > 0
-'''
 
 class CloudLLMService:
     def __init__(self, api_key: str, default_model: str) -> None:
@@ -766,6 +620,7 @@ class CloudLLMService:
         """调用API"""
         if not self.api_key:
             self.last_error = "未配置API_KEY"
+            print(f"[大模型错误] {self.last_error}", flush=True)
             return None
 
         url = "https://api.siliconflow.cn/v1/chat/completions"
@@ -779,7 +634,7 @@ class CloudLLMService:
         ]
 
         payload = {
-            "model": model or self.default_model,
+            "model": model.strip() if model else self.default_model.strip(),
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": num_predict_override or 512,
@@ -804,7 +659,7 @@ class CloudLLMService:
             return None
 
     def list_models(self) -> List[str]:
-        # Groq 不需要动态获取模型列表，直接返回默认模型即可
+        # SILICONFLOW不需要动态获取模型列表，直接返回默认模型即可
         return [self.default_model] if self.api_key else []
 
     def available(self) -> bool:

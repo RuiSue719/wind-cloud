@@ -49,10 +49,19 @@ const caseModuleMeta = document.getElementById("caseModuleMeta");
 const caseModuleTableWrap = document.getElementById("caseModuleTableWrap");
 const diagDatasetCards = document.getElementById("diagDatasetCards");
 const diagModelButtons = document.getElementById("diagModelButtons");
+const diagModelTip = document.getElementById("diagModelTip");
 const diagFileSelect = document.getElementById("diagFileSelect");
 const diagFileMeta = document.getElementById("diagFileMeta");
 const diagRunBtn = document.getElementById("diagRunBtn");
-const diagResultBody = document.getElementById("diagResultBody");
+const diagResultEmpty = document.getElementById("diagResultEmpty");
+const diagResultGrid = document.getElementById("diagResultGrid");
+const diagConclusionMain = document.getElementById("diagConclusionMain");
+const diagConclusionIndex = document.getElementById("diagConclusionIndex");
+const diagConfidenceBar = document.getElementById("diagConfidenceBar");
+const diagConfidenceText = document.getElementById("diagConfidenceText");
+const diagDetailList = document.getElementById("diagDetailList");
+const diagWaveCanvas = document.getElementById("diagWaveCanvas");
+const diagFftCanvas = document.getElementById("diagFftCanvas");
 const diagCustomTip = document.getElementById("diagCustomTip");
 const diagBackendStatus = document.getElementById("diagBackendStatus");
 
@@ -76,6 +85,16 @@ const diagState = {
   filePath: "",
   filesByDataset: {},
   optionsLoaded: false,
+  diagnosticLocked: false,
+  lastSignal: [],
+  lastFft: [],
+  lastResultLabel: "",
+};
+let DIAG_MODEL_TIPS = {
+  cnn: "专为一维时序振动信号设计，通过浅层卷积快速提取局部时域特征，适合数据量中等、追求轻量化快速推理的轴承故障诊断。",
+  wdcnn: "基于小波变换与深度 1D-CNN 结合的网络，能在强噪声下自适应提取轴承故障的时频特征，对 CWRU、JNU 等含噪实测数据鲁棒性更强。",
+  "cnn-lstm": "先用 CNN 提取空间局部特征，再用 LSTM 捕捉时序依赖关系，适合长序列轴承振动信号，能更好建模故障随时间演变的动态模式。",
+  "cnn-transformer": "以 CNN 做局部特征提取、Transformer 建模全局时序依赖，擅长捕捉长距离故障相关特征，在复杂变工况、多故障耦合轴承数据上表现更稳定。",
 };
 
 const CHAT_STORAGE_KEY = "industrial_qa_history_v1";
@@ -147,9 +166,16 @@ function switchModule(targetId) {
 
 function updateDiagRunButtonState() {
   if (!diagRunBtn) return;
+  if (diagState.diagnosticLocked) {
+    diagRunBtn.disabled = false;
+    diagRunBtn.classList.add("ready");
+    diagRunBtn.textContent = "开始下一个诊断";
+    return;
+  }
   const ready = Boolean(diagState.dataset && diagState.model && diagState.filePath);
   diagRunBtn.disabled = !ready;
   diagRunBtn.classList.toggle("ready", ready);
+  diagRunBtn.textContent = "开始诊断";
 }
 
 function setActiveDiagButton(container, attrName, value) {
@@ -157,6 +183,25 @@ function setActiveDiagButton(container, attrName, value) {
   container.querySelectorAll("button").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute(attrName) === value);
   });
+}
+
+function setDiagControlsEnabled(enabled) {
+  if (diagDatasetCards) {
+    diagDatasetCards.querySelectorAll(".diag-card").forEach((btn) => {
+      btn.disabled = !enabled;
+      btn.classList.toggle("disabled", !enabled);
+    });
+  }
+  if (diagModelButtons) {
+    diagModelButtons.querySelectorAll(".diag-seg").forEach((btn) => {
+      btn.disabled = !enabled;
+      btn.classList.toggle("disabled", !enabled);
+    });
+  }
+  if (diagFileSelect) {
+    const canSelect = enabled && diagState.dataset && diagState.dataset !== "CUSTOM";
+    diagFileSelect.disabled = !canSelect;
+  }
 }
 
 function resetDiagFileSelect(text = "请先选择数据集") {
@@ -168,23 +213,163 @@ function resetDiagFileSelect(text = "请先选择数据集") {
   updateDiagRunButtonState();
 }
 
+function createSeriesPoints(values, width, height, padding) {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  return values.map((value, index) => {
+    const x = padding + ((width - padding * 2) * index) / Math.max(values.length - 1, 1);
+    const y = height - padding - ((value - min) / range) * (height - padding * 2);
+    return { x, y };
+  });
+}
+
+function drawDiagWave(values, label) {
+  if (!diagWaveCanvas || !Array.isArray(values) || values.length === 0) return;
+  const ctx = diagWaveCanvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const width = diagWaveCanvas.clientWidth || 720;
+  const height = 260;
+  diagWaveCanvas.width = width * ratio;
+  diagWaveCanvas.height = height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  const padding = 26;
+  const points = createSeriesPoints(values, width, height, padding);
+  ctx.strokeStyle = "rgba(86, 124, 218, 0.2)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i += 1) {
+    const y = padding + ((height - padding * 2) * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(padding, y);
+    ctx.lineTo(width - padding, y);
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
+  ctx.strokeStyle = "#4d79df";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = "#3f63b0";
+  ctx.font = "13px 'Noto Sans SC', sans-serif";
+  ctx.fillText(`振动波形 · ${label || "-"}`, 14, 18);
+}
+
+function drawDiagFFT(values, label) {
+  if (!diagFftCanvas || !Array.isArray(values) || values.length === 0) return;
+  const ctx = diagFftCanvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const width = diagFftCanvas.clientWidth || 720;
+  const height = 260;
+  diagFftCanvas.width = width * ratio;
+  diagFftCanvas.height = height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  const padding = 26;
+  const max = Math.max(...values) || 1;
+  const barW = (width - padding * 2) / values.length;
+  ctx.strokeStyle = "rgba(86, 124, 218, 0.2)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i += 1) {
+    const y = padding + ((height - padding * 2) * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(padding, y);
+    ctx.lineTo(width - padding, y);
+    ctx.stroke();
+  }
+  values.forEach((value, idx) => {
+    const h = (value / max) * (height - padding * 2);
+    const x = padding + idx * barW;
+    const y = height - padding - h;
+    ctx.fillStyle = "rgba(74, 111, 205, 0.58)";
+    ctx.fillRect(x, y, Math.max(1, barW - 1), h);
+  });
+  ctx.fillStyle = "#3f63b0";
+  ctx.font = "13px 'Noto Sans SC', sans-serif";
+  ctx.fillText(`FFT 频谱 · ${label || "-"}`, 14, 18);
+}
+
+function resetDiagReportView() {
+  if (diagResultEmpty) {
+    diagResultEmpty.classList.remove("hidden");
+    diagResultEmpty.textContent = "请选择数据集、模型和样本后开始诊断。";
+  }
+  if (diagResultGrid) {
+    diagResultGrid.classList.add("hidden");
+  }
+  if (diagConclusionMain) diagConclusionMain.textContent = "-";
+  if (diagConclusionIndex) diagConclusionIndex.textContent = "模型输出类别索引：-";
+  if (diagConfidenceBar) diagConfidenceBar.style.width = "0%";
+  if (diagConfidenceText) diagConfidenceText.textContent = "0%";
+  if (diagDetailList) diagDetailList.innerHTML = "";
+  if (diagWaveCanvas) {
+    const ctx = diagWaveCanvas.getContext("2d");
+    ctx.clearRect(0, 0, diagWaveCanvas.width, diagWaveCanvas.height);
+  }
+  if (diagFftCanvas) {
+    const ctx = diagFftCanvas.getContext("2d");
+    ctx.clearRect(0, 0, diagFftCanvas.width, diagFftCanvas.height);
+  }
+  diagState.lastSignal = [];
+  diagState.lastFft = [];
+  diagState.lastResultLabel = "";
+}
+
 function renderDiagResult(result) {
-  if (!diagResultBody) return;
+  if (!diagResultEmpty || !diagResultGrid) return;
   const confidence = Number(result.confidence || 0) * 100;
   const probs = Array.isArray(result.probabilities) ? result.probabilities : [];
-  const top3 = probs
+  const sorted = probs
     .slice()
     .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
-    .slice(0, 3)
+    .slice(0, 3);
+  const top3 = sorted
     .map((it) => `${escapeHtml(it.label)}：${(Number(it.value || 0) * 100).toFixed(2)}%`)
     .join(" | ");
-  diagResultBody.innerHTML = `
-    <div class="diag-result-main">故障类型：${escapeHtml(result.prediction || "未知")}</div>
-    <div class="diag-result-sub">置信度：${confidence.toFixed(2)}%</div>
-    <div class="diag-result-sub">样本文件：${escapeHtml(result.filePath || "-")}</div>
-    <div class="diag-result-sub">模型：${escapeHtml(result.modelCanonical || "-")}</div>
-    <div class="diag-result-sub">Top3 概率：${top3 || "-"}</div>
-  `;
+  diagResultEmpty.classList.add("hidden");
+  diagResultGrid.classList.remove("hidden");
+  if (diagConclusionMain) diagConclusionMain.textContent = result.prediction || "未知";
+  if (diagConclusionIndex) diagConclusionIndex.textContent = `模型输出类别索引：${result.predictionIndex ?? "-"}`;
+  if (diagConfidenceBar) diagConfidenceBar.style.width = `${confidence.toFixed(2)}%`;
+  if (diagConfidenceText) diagConfidenceText.textContent = `${confidence.toFixed(2)}%`;
+  if (diagDetailList) {
+    const details = [
+      `所选模型：${result.modelCanonical || "-"}`,
+      `所选数据源：${result.dataset || diagState.dataset || "-"}`,
+      `测试样本：${result.filePath || "-"}`,
+      `推断故障：${result.prediction || "-"}`,
+      `类别概率分布：${top3 || "-"}`,
+    ];
+    diagDetailList.innerHTML = details.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  }
+  diagState.lastSignal = Array.isArray(result.signal) ? result.signal : [];
+  diagState.lastFft = Array.isArray(result.fft) ? result.fft : [];
+  diagState.lastResultLabel = result.prediction || "-";
+  drawDiagWave(diagState.lastSignal, diagState.lastResultLabel);
+  drawDiagFFT(diagState.lastFft, diagState.lastResultLabel);
+}
+
+function resetForNextDiagnosis() {
+  diagState.dataset = "";
+  diagState.model = "";
+  diagState.filePath = "";
+  diagState.diagnosticLocked = false;
+  setActiveDiagButton(diagDatasetCards, "data-dataset", "");
+  setActiveDiagButton(diagModelButtons, "data-model", "");
+  if (diagModelTip) {
+    diagModelTip.textContent = "将鼠标悬停在模型按钮上查看特点。";
+  }
+  if (diagCustomTip) {
+    diagCustomTip.classList.add("hidden");
+  }
+  resetDiagFileSelect("请先选择数据集");
+  resetDiagReportView();
+  setDiagControlsEnabled(true);
+  if (diagBackendStatus) {
+    diagBackendStatus.textContent = "推理状态：待机";
+  }
+  updateDiagRunButtonState();
 }
 
 async function loadDiagFiles(dataset) {
@@ -221,6 +406,13 @@ async function ensureDiagOptions() {
     const res = await fetch("/api/diag/options");
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "加载失败");
+    try {
+      const tipRes = await fetch("/api/diag/model-tips");
+      const tipData = await tipRes.json();
+      if (tipRes.ok && tipData && tipData.tips) {
+        DIAG_MODEL_TIPS = { ...DIAG_MODEL_TIPS, ...tipData.tips };
+      }
+    } catch (_) {}
     if (data.ready) {
       diagBackendStatus.textContent = "推理状态：就绪";
     } else {
@@ -240,6 +432,7 @@ function initDiagnosisModule() {
 
   diagDatasetCards.querySelectorAll(".diag-card").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      if (diagState.diagnosticLocked) return;
       const dataset = btn.getAttribute("data-dataset") || "";
       diagState.dataset = dataset;
       diagState.filePath = "";
@@ -263,15 +456,31 @@ function initDiagnosisModule() {
   });
 
   diagModelButtons.querySelectorAll(".diag-seg").forEach((btn) => {
+    btn.addEventListener("mouseenter", () => {
+      const model = btn.getAttribute("data-model") || "";
+      if (diagModelTip) {
+        diagModelTip.textContent = DIAG_MODEL_TIPS[model] || "将鼠标悬停在模型按钮上查看特点。";
+      }
+    });
+    btn.addEventListener("mouseleave", () => {
+      if (!diagModelTip) return;
+      const current = diagState.model;
+      diagModelTip.textContent = current ? (DIAG_MODEL_TIPS[current] || "将鼠标悬停在模型按钮上查看特点。") : "将鼠标悬停在模型按钮上查看特点。";
+    });
     btn.addEventListener("click", () => {
+      if (diagState.diagnosticLocked) return;
       const model = btn.getAttribute("data-model") || "";
       diagState.model = model;
       setActiveDiagButton(diagModelButtons, "data-model", model);
+      if (diagModelTip) {
+        diagModelTip.textContent = DIAG_MODEL_TIPS[model] || "将鼠标悬停在模型按钮上查看特点。";
+      }
       updateDiagRunButtonState();
     });
   });
 
   diagFileSelect.addEventListener("change", () => {
+    if (diagState.diagnosticLocked) return;
     diagState.filePath = diagFileSelect.value || "";
     if (diagFileMeta) {
       diagFileMeta.textContent = diagState.filePath ? `当前样本：${diagState.filePath}` : "当前未选择样本";
@@ -281,6 +490,10 @@ function initDiagnosisModule() {
 
   diagRunBtn.addEventListener("click", async () => {
     if (diagRunBtn.disabled) return;
+    if (diagState.diagnosticLocked) {
+      resetForNextDiagnosis();
+      return;
+    }
     diagRunBtn.disabled = true;
     diagRunBtn.textContent = "诊断中...";
     if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：处理中...";
@@ -299,19 +512,33 @@ function initDiagnosisModule() {
         throw new Error(data.error || "推理失败");
       }
       renderDiagResult(data);
+      diagState.diagnosticLocked = true;
+      setDiagControlsEnabled(false);
       if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：完成";
     } catch (e) {
-      if (diagResultBody) {
-        diagResultBody.textContent = `诊断失败：${e.message || "未知错误"}`;
+      if (diagResultEmpty) {
+        diagResultEmpty.classList.remove("hidden");
+        if (diagResultGrid) {
+          diagResultGrid.classList.add("hidden");
+        }
+        diagResultEmpty.textContent = `诊断失败：${e.message || "未知错误"}`;
       }
       if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：失败";
     } finally {
-      diagRunBtn.textContent = "开始诊断";
       updateDiagRunButtonState();
     }
   });
 
+  window.addEventListener("resize", () => {
+    if (diagResultGrid && !diagResultGrid.classList.contains("hidden")) {
+      drawDiagWave(diagState.lastSignal, diagState.lastResultLabel || "-");
+      drawDiagFFT(diagState.lastFft, diagState.lastResultLabel || "-");
+    }
+  });
+
   resetDiagFileSelect("请先选择数据集");
+  resetDiagReportView();
+  setDiagControlsEnabled(true);
   updateDiagRunButtonState();
 }
 

@@ -125,11 +125,14 @@
 
         <div class="diag-group">
           <div class="diag-label">选择诊断模型</div>
-          <div id="diagModelButtons" class="diag-model-grid">
-            <button class="diag-seg" data-model="cnn">CNN</button>
-            <button class="diag-seg" data-model="wdcnn">WDCNN</button>
-            <button class="diag-seg" data-model="cnn-lstm">CNN-LSTM</button>
-            <button class="diag-seg" data-model="cnn-transformer">CNN-Transformer</button>
+          <div class="diag-model-wrap">
+            <div id="diagModelButtons" class="diag-model-grid">
+              <button class="diag-seg" data-model="cnn">CNN</button>
+              <button class="diag-seg" data-model="wdcnn">WDCNN</button>
+              <button class="diag-seg" data-model="cnn-lstm">CNN-LSTM</button>
+              <button class="diag-seg" data-model="cnn-transformer">CNN-Transformer</button>
+            </div>
+            <div id="diagModelTip" class="diag-model-tip">将鼠标悬停在模型按钮上查看特点。</div>
           </div>
         </div>
 
@@ -149,7 +152,31 @@
 
       <section class="diag-result-card">
         <h3>诊断结果</h3>
-        <div id="diagResultBody" class="diag-result-body">请选择数据集、模型和样本后开始诊断。</div>
+        <div id="diagResultEmpty" class="diag-result-body">请选择数据集、模型和样本后开始诊断。</div>
+        <div id="diagResultGrid" class="diag-result-grid hidden">
+          <article class="diag-report-block">
+            <div class="diag-report-title">诊断结论</div>
+            <div id="diagConclusionMain" class="diag-result-main">-</div>
+            <div id="diagConclusionIndex" class="diag-result-sub">模型输出类别索引：-</div>
+            <div class="diag-confidence-wrap">
+              <div class="diag-result-sub">置信度</div>
+              <div class="diag-confidence-bar"><span id="diagConfidenceBar"></span></div>
+              <div id="diagConfidenceText" class="diag-result-sub">0%</div>
+            </div>
+          </article>
+          <article class="diag-report-block">
+            <div class="diag-report-title">诊断详情</div>
+            <ul id="diagDetailList" class="diag-detail-list"></ul>
+          </article>
+          <article class="diag-report-block">
+            <div class="diag-report-title">振动波形</div>
+            <canvas id="diagWaveCanvas" width="720" height="260"></canvas>
+          </article>
+          <article class="diag-report-block">
+            <div class="diag-report-title">FFT 频谱图</div>
+            <canvas id="diagFftCanvas" width="720" height="260"></canvas>
+          </article>
+        </div>
       </section>
       </main>
 

@@ -713,6 +713,7 @@ KB_PATHS = [
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
 CASE_SOURCE_CSV_PATH = BASE_DIR / "csv新" / "风电故障诊断图谱说明.csv"
+NETWORK_FEATURE_PATH = BASE_DIR / "网络特点.txt"
 USER_DB_PATH = BASE_DIR / "users.sqlite3"
 DIAG_INPUT_LEN = 1024
 DIAG_DATASET_ROOTS = {
@@ -734,6 +735,12 @@ DIAG_MODEL_TO_FILENAME = {
     "WDCNN": "WDCNN-Opt_best.pth",
     "CNN-LSTM": "CNN-LSTM-Opt_best.pth",
     "CNN-Transformer": "CNN-Transformer-Opt_best.pth",
+}
+DIAG_MODEL_TIPS_DEFAULT = {
+    "cnn": "专为一维时序振动信号设计，通过浅层卷积快速提取局部时域特征，适合数据量中等、追求轻量化快速推理的轴承故障诊断。",
+    "wdcnn": "基于小波变换与深度 1D-CNN 结合的网络，能在强噪声下自适应提取轴承故障的时频特征，对 CWRU、JNU 等含噪实测数据鲁棒性更强。",
+    "cnn-lstm": "先用 CNN 提取空间局部特征，再用 LSTM 捕捉时序依赖关系，适合长序列轴承振动信号，能更好建模故障随时间演变的动态模式。",
+    "cnn-transformer": "以 CNN 做局部特征提取、Transformer 建模全局时序依赖，擅长捕捉长距离故障相关特征，在复杂变工况、多故障耦合轴承数据上表现更稳定。",
 }
 DIAG_CLASS_NAMES = {
     "CWRU": [
@@ -1128,6 +1135,7 @@ def diag_infer(dataset: str, model_canonical: str, file_path: str) -> Dict[str, 
     pred_idx = int(np.argmax(probs))
     labels = DIAG_CLASS_NAMES[dataset]
     pred_label = labels[pred_idx] if pred_idx < len(labels) else "未知"
+    fft = np.abs(np.fft.rfft(x))[:256]
     return {
         "prediction": pred_label,
         "predictionIndex": pred_idx,
@@ -1135,7 +1143,39 @@ def diag_infer(dataset: str, model_canonical: str, file_path: str) -> Dict[str, 
         "probabilities": [{"label": labels[i], "value": float(probs[i])} for i in range(len(labels))],
         "filePath": str(file_path),
         "modelCanonical": model_canonical,
+        "signal": [float(v) for v in x[:512]],
+        "fft": [float(v) for v in fft],
     }
+
+
+def load_diag_model_tips() -> Dict[str, str]:
+    tips = dict(DIAG_MODEL_TIPS_DEFAULT)
+    if not NETWORK_FEATURE_PATH.exists():
+        return tips
+    try:
+        lines = [line.strip() for line in NETWORK_FEATURE_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+        current = ""
+        key_map = {
+            "1D-CNN": "cnn",
+            "WDCNN": "wdcnn",
+            "CNN-LSTM": "cnn-lstm",
+            "CNN-Transformer": "cnn-transformer",
+        }
+        for line in lines:
+            normalized = line
+            for prefix in ("1.", "2.", "3.", "4."):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):].strip()
+                    break
+            if normalized in key_map:
+                current = key_map[normalized]
+                continue
+            if current and normalized:
+                tips[current] = normalized
+                current = ""
+    except Exception:
+        return tips
+    return tips
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -1353,6 +1393,11 @@ def diag_options():
             "dependencyError": dep_error or "",
         }
     )
+
+
+@app.get("/api/diag/model-tips")
+def diag_model_tips():
+    return jsonify({"tips": load_diag_model_tips()})
 
 
 @app.get("/api/diag/files")

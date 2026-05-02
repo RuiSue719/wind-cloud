@@ -572,16 +572,15 @@ function renderStatus() {
   }
   if (!lastStatus) {
     runtimeStatus.className = "status-chip";
-    runtimeStatus.textContent = "neo4j,ollama连接中";
+    runtimeStatus.textContent = "neo4j连接中";
     return;
   }
 
   const neo = lastStatus.neo4j || {};
-  const oll = lastStatus.ollama || {};
-  const ok = neo.available && oll.available;
+  const ok = Boolean(neo.available);
 
-  runtimeStatus.className = `status-chip ${ok ? "ok" : ""}`;
-  runtimeStatus.textContent = ok ? "neo4j,ollama已连接" : "neo4j,ollama未连接";
+  runtimeStatus.className = `status-chip ${ok ? "ok" : "error"}`;
+  runtimeStatus.textContent = ok ? "neo4j已连接" : "neo4j未连接";
   if (kgConnPanel) {
     kgConnPanel.style.display = ok ? "none" : "grid";
   }

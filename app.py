@@ -53,7 +53,7 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
 SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 
 LOGIN_DEFAULT_USER = "admin"
@@ -643,22 +643,37 @@ class CloudLLMService:
             {"role": "user", "content": prompt}
         ]
 
+        selected_model = (model or self.default_model or "Qwen/Qwen3-8B").strip()
         payload = {
-            "model": model or self.default_model,
+            "model": selected_model,
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": num_predict_override or 512,
             "top_p": 0.9,
+            "stream": False,
         }
 
         try:
             res = requests.post(url, headers=headers, json=payload,
-                                timeout=timeout_seconds_override or 60)
+                                timeout= 60)
             res.raise_for_status()
             data = res.json()
             self.last_http_ok = True
-            self.last_model = model or self.default_model
-            content = data["choices"][0]["message"]["content"].strip()
+            self.last_model = selected_model
+            choices = data.get("choices") or []
+            if not choices:
+                self.last_error = f"SiliconFlow 返回异常：{str(data)[:200]}"
+                return None
+            msg = choices[0].get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, list):
+                content = "".join(
+                    str(part.get("text", "")) if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            content = str(content or "").strip()
+            if not content:
+                content = str(msg.get("reasoning_content") or "").strip()
             if content:
                 self.last_error = ""
                 return content

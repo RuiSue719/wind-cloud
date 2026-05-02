@@ -20,4 +20,4 @@ COPY . .
 EXPOSE $PORT
 
 # 启动命令（与你的项目一致，使用 gunicorn）
-CMD ["gunicorn", "app:app"]
+CMD ["gunicorn", "app:app", "--timeout", "120", "--bind", "0.0.0.0:8080"]

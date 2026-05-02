@@ -211,6 +211,12 @@ body {
   color: #1f6d44;
 }
 
+.status-chip.error {
+  border-color: #f0c3c3;
+  background: #fff1f1;
+  color: #b43636;
+}
+
 .engineer-inline {
   position: absolute;
   top: 12px;

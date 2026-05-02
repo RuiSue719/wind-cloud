@@ -53,7 +53,8 @@
       <div class="login-error login-success">{{ register_success }}</div>
       {% endif %}
 
-      <form method="post" class="login-form login-form-login {% if register_mode %}hidden{% endif %}" id="loginForm">
+      {% if not register_mode %}
+      <form method="post" class="login-form login-form-login" id="loginForm">
         <div class="login-input">
           <span class="login-icon">👤</span>
           <input name="username" type="text" placeholder="请输入用户名" required />
@@ -65,11 +66,13 @@
         <button type="submit" class="login-btn">立即登录</button>
         <div class="login-switch">还没有账户？ <a href="/login?mode=register" id="showRegister">立即注册</a></div>
       </form>
+      {% endif %}
 
       {% if register_error %}
       <div class="login-error">{{ register_error }}</div>
       {% endif %}
-      <form method="post" action="/register" class="login-form login-form-register {% if not register_mode %}hidden{% endif %}" id="registerForm">
+      {% if register_mode %}
+      <form method="post" action="/register" class="login-form login-form-register" id="registerForm">
         <div class="login-input">
           <span class="login-icon">👤</span>
           <input name="username" type="text" placeholder="用户名（登录凭证）" required />
@@ -93,6 +96,7 @@
         <button type="submit" class="login-btn">立即注册</button>
         <div class="login-switch">已有账户？ <a href="/login" id="showLogin">返回登录</a></div>
       </form>
+      {% endif %}
     </section>
   </main>
 </body>

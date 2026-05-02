@@ -639,7 +639,7 @@ class CloudLLMService:
             "Content-Type": "application/json"
         }
         messages = [
-            {"role": "system", "content": "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"},
+            {"role": "system", "content": "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。回复不超过300字。"},
             {"role": "user", "content": prompt}
         ]
 
@@ -653,16 +653,26 @@ class CloudLLMService:
             "stream": False,
         }
 
+        # 强烈建议保留这些调试输出，会在 Railway 日志中显示
+        print(f"[DEBUG] 请求模型: {selected_model}")
+        print(f"[DEBUG] API Key 前缀: {self.api_key[:15]}...")
+        print(f"[DEBUG] 超时设置: {timeout_seconds_override or 60} 秒")
+
+        timeout_seconds = timeout_seconds_override or 60
         try:
-            res = requests.post(url, headers=headers, json=payload,
-                                timeout= 60)
-            res.raise_for_status()
+            res = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+            print(f"[DEBUG] HTTP 状态码: {res.status_code}")
+            if res.status_code != 200:
+                self.last_error = f"HTTP {res.status_code}: {res.text[:200]}"
+                print(f"[DEBUG] 错误响应: {self.last_error}")
+                return None
             data = res.json()
             self.last_http_ok = True
             self.last_model = selected_model
             choices = data.get("choices") or []
             if not choices:
                 self.last_error = f"SiliconFlow 返回异常：{str(data)[:200]}"
+                print(f"[DEBUG] {self.last_error}")
                 return None
             msg = choices[0].get("message") or {}
             content = msg.get("content")
@@ -676,13 +686,19 @@ class CloudLLMService:
                 content = str(msg.get("reasoning_content") or "").strip()
             if content:
                 self.last_error = ""
+                print(f"[DEBUG] 成功获取内容，长度 {len(content)}")
                 return content
             self.last_error = "SiliconFlow 返回空内容"
             return None
+        except requests.exceptions.Timeout:
+            self.last_error = f"请求超时 ({timeout_seconds} 秒)"
+            print(f"[DEBUG] {self.last_error}")
+            return None
         except Exception as exc:
             self.last_error = f"SiliconFlow 调用失败: {exc}"
+            print(f"[DEBUG] 异常: {self.last_error}")
             return None
-
+        
     def list_models(self) -> List[str]:
         # 当前固定使用环境变量指定模型
         return [self.default_model] if self.api_key else []
@@ -1576,6 +1592,7 @@ def chat():
         response_state = "fallback"
         llm_error = "已基于引用证据快速生成答案。"
     else:
+        print(f"[DEBUG] 开始调用 LLM，超时设置: {llm_timeout}")
         llm_raw_text = cloud_llm.chat(
             prompt_head + "\n" + llm_prompt,
             model=model_name,
@@ -1583,6 +1600,7 @@ def chat():
             num_predict_override=llm_num_predict,
             timeout_seconds_override=llm_timeout,
         )
+        print(f"[DEBUG] LLM 原始返回: {llm_raw_text[:100] if llm_raw_text else 'None'}")
         llm_text = (llm_raw_text or "").strip()
         cloud_http_ok = cloud_llm.last_http_ok
         llm_generated = bool(llm_text)

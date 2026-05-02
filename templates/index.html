@@ -9,14 +9,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body>
+<body data-username="{{ username }}">
   <div id="appShell" class="app-shell with-sidebar">
     <aside class="module-sidebar">
       <div class="module-sidebar-title">功能导航</div>
       <button class="side-nav-item active" data-target="qaModule">智能问答</button>
       <button class="side-nav-item" data-target="kgModule">图谱可视化</button>
+      <button class="side-nav-item" data-target="diagModule">数据诊断</button>
+      {% if is_admin %}
       <button class="side-nav-item" data-target="kgManageModule">图谱管理</button>
       <button class="side-nav-item" data-target="caseModule">诊断案例</button>
+      {% endif %}
     </aside>
 
     <div id="moduleSplitter" class="col-splitter module-splitter" title="拖拽调节宽度"></div>
@@ -45,7 +48,7 @@
 
       <main id="qaModule" class="content module active">
       <aside class="engineer-inline" aria-label="Q版女性工程师形象">
-        <img src="{{ url_for('static', filename='assets/engineer2.png') }}" alt="Q版女性工程师" onerror="this.onerror=null;this.src='{{ url_for('static', filename='assets/engineer.png') }}';" />
+        <img src="{{ url_for('static', filename='assets/engineer.png') }}" alt="工程师形象" />
       </aside>
       <section class="welcome-card">
         <h1>Hi，欢迎来到风电设备故障诊断一体化问答系统</h1>
@@ -94,19 +97,91 @@
       <section id="tripletList" class="triplet-list"></section>
       </main>
 
+      <main id="diagModule" class="content module">
+      <section class="diag-hero">
+        <h1>风电轴承故障诊断系统</h1>
+        <p>支持 CWRU / MFPT 数据集多模型推理，输入样本后自动输出故障类型与置信度。</p>
+      </section>
+
+      <section class="diag-panel">
+        <div class="diag-group">
+          <div class="diag-label">选择数据集</div>
+          <div id="diagDatasetCards" class="diag-dataset-grid">
+            <button class="diag-card" data-dataset="CWRU">
+              <span class="diag-card-title">CWRU</span>
+              <span class="diag-card-desc">MAT 文件，覆盖 DE/FE 多位置故障</span>
+            </button>
+            <button class="diag-card" data-dataset="MFPT">
+              <span class="diag-card-title">MFPT</span>
+              <span class="diag-card-desc">MAT 文件，覆盖正常/外圈故障/内圈故障</span>
+            </button>
+            <button class="diag-card" data-dataset="CUSTOM">
+              <span class="diag-card-title">自定义上传</span>
+              <span class="diag-card-desc">上传 .csv/.mat 并调用 pth 推理</span>
+            </button>
+          </div>
+          <div id="diagCustomTip" class="diag-tip hidden">当前功能开发中</div>
+        </div>
+
+        <div class="diag-group">
+          <div class="diag-label">选择诊断模型</div>
+          <div id="diagModelButtons" class="diag-model-grid">
+            <button class="diag-seg" data-model="cnn">CNN</button>
+            <button class="diag-seg" data-model="wdcnn">WDCNN</button>
+            <button class="diag-seg" data-model="cnn-lstm">CNN-LSTM</button>
+            <button class="diag-seg" data-model="cnn-transformer">CNN-Transformer</button>
+          </div>
+        </div>
+
+        <div class="diag-group">
+          <div class="diag-label">选择样本文件（.mat）</div>
+          <select id="diagFileSelect" class="diag-select" disabled>
+            <option value="">请先选择数据集</option>
+          </select>
+          <p id="diagFileMeta" class="diag-meta">当前未选择样本</p>
+        </div>
+
+        <div class="diag-actions">
+          <button id="diagRunBtn" class="diag-run-btn" disabled>开始诊断</button>
+          <div id="diagBackendStatus" class="diag-status">推理状态：待机</div>
+        </div>
+      </section>
+
+      <section class="diag-result-card">
+        <h3>诊断结果</h3>
+        <div id="diagResultBody" class="diag-result-body">请选择数据集、模型和样本后开始诊断。</div>
+      </section>
+      </main>
+
+      {% if is_admin %}
       <main id="kgManageModule" class="content module">
       <section class="welcome-card">
         <h1>图谱管理</h1>
-        <p>用于维护图谱节点、关系和同步任务（当前版本提供占位模块，可继续扩展）。</p>
+        <p>展示 `csv文件` 目录下的图谱数据源，支持逐个文件查看完整内容。</p>
+      </section>
+      <section class="admin-manage-layout">
+        <aside class="admin-file-list-card">
+          <h3>CSV文件列表</h3>
+          <div id="kgManageFileList" class="admin-file-list"></div>
+        </aside>
+        <section class="admin-file-detail-card">
+          <div id="kgManageDetailTitle" class="admin-detail-title">请选择左侧CSV文件查看</div>
+          <div id="kgManageTableWrap" class="admin-table-wrap"></div>
+        </section>
       </section>
       </main>
 
       <main id="caseModule" class="content module">
       <section class="welcome-card">
         <h1>诊断案例</h1>
-        <p>沉淀典型故障案例与排查路径（当前版本提供占位模块，可继续扩展）。</p>
+        <p>展示 `风电故障诊断图谱说明.csv` 第6-23行，字段为“故障位置/关联/后果/案例来源”。</p>
+      </section>
+      <section class="admin-case-card">
+        <div id="caseModuleMeta" class="admin-detail-title"></div>
+        <div id="caseModuleTableWrap" class="admin-table-wrap"></div>
       </section>
       </main>
+      {% endif %}
 
       <footer id="composer" class="composer">
       <div id="citationBar" class="citation-bar hidden"></div>

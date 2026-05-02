@@ -3,14 +3,31 @@ import re
 import os
 import time
 import csv
+import sqlite3
+from datetime import datetime
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 from neo4j import GraphDatabase
+try:
+    import numpy as np
+except Exception:
+    np = None
+try:
+    import torch
+    import torch.nn as nn
+except Exception:
+    torch = None
+    nn = None
+try:
+    from scipy.io import loadmat
+except Exception:
+    loadmat = None
 
 
 app = Flask(__name__)
@@ -35,12 +52,16 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-# 移除 OLLAMA 相关的环境变量，添加 GROQ
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
+SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
+LOGIN_DEFAULT_ROLE = "admin"
+
+USER_ROLE_USER = "user"
+USER_ROLE_ADMIN = "admin"
 
 
 FAQ_POOL = [
@@ -589,156 +610,7 @@ class Neo4jService:
             return ""
         return str(rows[0].get("label") or "").strip()
 
-'''
-class OllamaService:
-    def __init__(self, base_url: str, default_model: str, timeout_seconds: int) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.default_model = default_model
-        self.last_error = ""
-        self.timeout_seconds = max(8, timeout_seconds)
-        self.force_cpu = OLLAMA_FORCE_CPU
-        self.num_thread = max(1, OLLAMA_NUM_THREAD)
-        self.num_gpu = max(0, OLLAMA_NUM_GPU)
-        self.last_http_ok = False
-        self.last_model = default_model
 
-    def update_config(self, base_url: str = "", default_model: str = "") -> None:
-        if base_url:
-            self.base_url = base_url.rstrip("/")
-        if default_model:
-            self.default_model = default_model
-        self.last_error = ""
-
-    @staticmethod
-    def _model_rank(model_name: str) -> float:
-        text = (model_name or "").lower()
-        match = re.search(r":(?:[a-z]+)?(\d+)b", text)
-        if match:
-            return float(match.group(1))
-        if "e2b" in text:
-            return 2.0
-        if "1b" in text:
-            return 1.0
-        return 999.0
-
-    @staticmethod
-    def _thinking_to_brief(thinking_text: str, max_points: int = 3) -> str:
-        raw = (thinking_text or "").strip()
-        if not raw:
-            return ""
-        lines = re.split(r"[\n。；;]+", raw)
-        points: List[str] = []
-        for line in lines:
-            clean = re.sub(r"^[\-\*\d\s\.:：]+", "", line).strip()
-            clean = re.sub(r"\s+", " ", clean)
-            if len(clean) < 8:
-                continue
-            if clean not in points:
-                points.append(clean)
-            if len(points) >= max_points:
-                break
-        if not points:
-            raw = re.sub(r"\s+", " ", raw)
-            return f"1. {raw[:90]}"
-        return "\n".join([f"{i + 1}. {p[:60]}" for i, p in enumerate(points)])
-
-    def recommended_model(self, models: Optional[List[str]] = None) -> str:
-        candidates = models or self.list_models()
-        if not candidates:
-            return self.default_model
-        return sorted(candidates, key=self._model_rank)[0]
-
-    def chat(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        system_prompt: str = "",
-        max_models_to_try: int = 3,
-        num_predict_override: Optional[int] = None,
-        timeout_seconds_override: Optional[int] = None,
-    ) -> Optional[str]:
-        self.last_http_ok = False
-        available_models = self.list_models()
-        selected_model = model or self.default_model
-        if available_models and selected_model not in available_models:
-            selected_model = self.recommended_model(available_models)
-
-        max_try = max(1, min(int(max_models_to_try or 1), 3))
-        request_timeout = max(8, int(timeout_seconds_override or self.timeout_seconds))
-
-        candidate_models: List[str] = []
-        for name in [selected_model, self.recommended_model(available_models) if available_models else ""]:
-            if name and name not in candidate_models:
-                candidate_models.append(name)
-        for name in available_models:
-            if name not in candidate_models:
-                candidate_models.append(name)
-
-        payload = {
-            "stream": False,
-            "keep_alive": "30m",
-            "options": {
-                "num_predict": int(num_predict_override or 512),
-                "temperature": 0.2,
-                "top_p": 0.9,
-            },
-            "messages": [
-                {"role": "system", "content": system_prompt or "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"},
-                {"role": "user", "content": prompt},
-            ],
-        }
-
-        if self.force_cpu:
-            payload["options"]["num_gpu"] = 0
-            payload["options"]["num_thread"] = self.num_thread
-            payload["options"]["low_vram"] = True
-        elif self.num_gpu >= 0:
-            payload["options"]["num_gpu"] = self.num_gpu
-
-        last_exc: Optional[Exception] = None
-        tried_models: List[str] = []
-        for candidate in candidate_models[:max_try]:
-            tried_models.append(candidate)
-            self.last_model = candidate
-            payload["model"] = candidate
-            try:
-                res = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=request_timeout)
-                res.raise_for_status()
-                self.last_http_ok = True
-                data = res.json()
-                text = ((data.get("message") or {}).get("content") or "").strip()
-                if text:
-                    self.last_error = ""
-                    return text
-                thinking = ((data.get("message") or {}).get("thinking") or "").strip()
-                # Some models can return HTTP 200 with empty content; retry next candidate model.
-                done_reason = data.get("done_reason") or "unknown"
-                self.last_error = f"{candidate}: 响应为空（done_reason={done_reason}），尝试后备模型"
-                continue
-            except Exception as exc:
-                last_exc = exc
-                self.last_error = f"{candidate}: {exc}"
-
-        if last_exc is not None:
-            self.last_error = f"已尝试模型 {', '.join(tried_models)}，最后错误：{last_exc}"
-        elif tried_models:
-            self.last_error = f"已尝试模型 {', '.join(tried_models)}，均返回空内容"
-        return None
-
-    def list_models(self) -> List[str]:
-        try:
-            res = requests.get(f"{self.base_url}/api/tags", timeout=8)
-            res.raise_for_status()
-            data = res.json()
-            self.last_error = ""
-            return [m.get("name") for m in data.get("models", []) if m.get("name")]
-        except Exception as exc:
-            self.last_error = str(exc)
-            return []
-
-    def available(self) -> bool:
-        return len(self.list_models()) > 0
-'''
 
 class CloudLLMService:
     def __init__(self, api_key: str, default_model: str) -> None:
@@ -756,12 +628,12 @@ class CloudLLMService:
         num_predict_override: Optional[int] = None,
         timeout_seconds_override: Optional[int] = None,
     ) -> Optional[str]:
-        """调用 Groq API（OpenAI 兼容）"""
+        """调用 SiliconFlow API（OpenAI 兼容）"""
         if not self.api_key:
-            self.last_error = "未配置 GROQ_API_KEY"
+            self.last_error = "未配置 SILICONFLOW_API_KEY"
             return None
 
-        url = "https://api.groq.com/openai/v1/chat/completions"
+        url = "https://api.siliconflow.cn/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -790,14 +662,14 @@ class CloudLLMService:
             if content:
                 self.last_error = ""
                 return content
-            self.last_error = "Groq 返回空内容"
+            self.last_error = "SiliconFlow 返回空内容"
             return None
         except Exception as exc:
-            self.last_error = f"Groq 调用失败: {exc}"
+            self.last_error = f"SiliconFlow 调用失败: {exc}"
             return None
 
     def list_models(self) -> List[str]:
-        # Groq 不需要动态获取模型列表，直接返回默认模型即可
+        # 当前固定使用环境变量指定模型
         return [self.default_model] if self.api_key else []
 
     def available(self) -> bool:
@@ -809,11 +681,430 @@ KB_PATHS = [
     BASE_DIR / "data" / "wind_power_qa.md",
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
+CASE_SOURCE_CSV_PATH = BASE_DIR / "csv新" / "风电故障诊断图谱说明.csv"
+USER_DB_PATH = BASE_DIR / "users.sqlite3"
+DIAG_INPUT_LEN = 1024
+DIAG_DATASET_ROOTS = {
+    "CWRU": BASE_DIR / "CRWU",
+    "MFPT": BASE_DIR / "MFPT Fault Data Sets",
+}
+DIAG_PTH_ROOTS = {
+    "CWRU": BASE_DIR / "pth" / "CWRU-12K",
+    "MFPT": BASE_DIR / "pth" / "mfpt",
+}
+DIAG_MODEL_ALIASES = {
+    "cnn": "1D-CNN",
+    "wdcnn": "WDCNN",
+    "cnn-lstm": "CNN-LSTM",
+    "cnn-transformer": "CNN-Transformer",
+}
+DIAG_MODEL_TO_FILENAME = {
+    "1D-CNN": "1D-CNN-Opt_best.pth",
+    "WDCNN": "WDCNN-Opt_best.pth",
+    "CNN-LSTM": "CNN-LSTM-Opt_best.pth",
+    "CNN-Transformer": "CNN-Transformer-Opt_best.pth",
+}
+DIAG_CLASS_NAMES = {
+    "CWRU": [
+        "正常",
+        "内圈故障-轻度(0.007in)",
+        "内圈故障-中度(0.014in)",
+        "内圈故障-重度(0.021in)",
+        "外圈故障-轻度(0.007in)",
+        "外圈故障-中度(0.014in)",
+        "外圈故障-重度(0.021in)",
+        "滚动体故障-轻度(0.007in)",
+        "滚动体故障-中度(0.014in)",
+        "滚动体故障-重度(0.021in)",
+    ],
+    "MFPT": ["正常", "外圈故障", "内圈故障"],
+}
+DIAG_MODEL_CACHE: Dict[str, Any] = {}
 QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
-cloud_llm = CloudLLMService(GROQ_API_KEY, GROQ_MODEL)
+cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
+
+
+def _db_connect():
+    conn = sqlite3.connect(USER_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_user_db() -> None:
+    with _db_connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                phone TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    seed_default_admin()
+
+
+def seed_default_admin() -> None:
+    existing = get_user_by_username(LOGIN_DEFAULT_USER)
+    if existing:
+        return
+    create_user(
+        username=LOGIN_DEFAULT_USER,
+        password=LOGIN_DEFAULT_PASSWORD,
+        role=LOGIN_DEFAULT_ROLE,
+        phone="",
+    )
+
+
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    if not username:
+        return None
+    with _db_connect() as conn:
+        cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+        return cur.fetchone()
+
+
+def create_user(username: str, password: str, role: str, phone: str = "") -> None:
+    password_hash = generate_password_hash(password)
+    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _db_connect() as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, role, phone, created_at),
+        )
+        conn.commit()
+
+
+init_user_db()
+
+
+def is_admin_session() -> bool:
+    return (session.get("role") or "").strip().lower() == USER_ROLE_ADMIN
+
+
+def load_case_rows_from_source(start_line: int = 6, end_line: int = 23) -> List[Dict[str, str]]:
+    if not CASE_SOURCE_CSV_PATH.exists():
+        return []
+    rows: List[Dict[str, str]] = []
+    with CASE_SOURCE_CSV_PATH.open("r", encoding="utf-8-sig", newline="") as fp:
+        for idx, line in enumerate(fp, start=1):
+            if idx < start_line or idx > end_line:
+                continue
+            raw = (line or "").strip()
+            if not raw:
+                continue
+            parts = [item.strip() for item in raw.split(",")]
+            while len(parts) < 4:
+                parts.append("")
+            rows.append(
+                {
+                    "故障位置": parts[0],
+                    "关联": parts[1],
+                    "后果": parts[2],
+                    "案例来源": parts[3],
+                }
+            )
+    return rows
+
+
+def read_csv_rows(csv_path: Path) -> Dict[str, Any]:
+    rows: List[List[str]] = []
+    for enc in ("utf-8-sig", "gbk", "utf-8"):
+        try:
+            with csv_path.open("r", encoding=enc, newline="") as fp:
+                reader = csv.reader(fp)
+                rows = [list(r) for r in reader if any((cell or "").strip() for cell in r)]
+            break
+        except Exception:
+            rows = []
+            continue
+
+    if not rows:
+        return {"columns": [], "rows": []}
+
+    header = [str(c).strip() for c in rows[0]]
+    data_rows = rows[1:]
+    col_len = len(header)
+    normalized_rows: List[List[str]] = []
+    for r in data_rows:
+        normalized = [str(c).strip() for c in r]
+        if len(normalized) < col_len:
+            normalized.extend([""] * (col_len - len(normalized)))
+        elif len(normalized) > col_len:
+            normalized = normalized[:col_len]
+        normalized_rows.append(normalized)
+    return {"columns": header, "rows": normalized_rows}
+
+
+def diag_dependencies_ready() -> Optional[str]:
+    if np is None:
+        return "缺少 numpy 依赖，请先安装。"
+    if torch is None or nn is None:
+        return "缺少 torch 依赖，请先安装。"
+    if loadmat is None:
+        return "缺少 scipy 依赖，请先安装。"
+    return None
+
+
+if nn is not None:
+    class DiagOneDCNN(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv1d(1, 64, kernel_size=11, padding=5),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(4),
+                nn.Conv1d(64, 128, kernel_size=3, padding=1),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.MaxPool1d(4),
+                nn.Flatten(),
+                nn.Linear(128 * 64, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_classes),
+            )
+
+        def forward(self, x):
+            return self.net(x)
+
+
+    class DiagWDCNN(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.layer1 = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size=64, stride=16, padding=24),
+                nn.BatchNorm1d(16),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+            )
+            self.layer2 = nn.Sequential(
+                nn.Conv1d(16, 32, 3, padding=1),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+                nn.Conv1d(32, 64, 3, padding=1),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+                nn.Flatten(),
+                nn.Linear(64 * 8, 256),
+                nn.ReLU(),
+                nn.Linear(256, num_classes),
+            )
+
+        def forward(self, x):
+            return self.layer2(self.layer1(x))
+
+
+    class DiagCNNLSTM(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.cnn = nn.Sequential(
+                nn.Conv1d(1, 64, kernel_size=7, stride=2, padding=3),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(2),
+            )
+            self.lstm = nn.LSTM(
+                input_size=64,
+                hidden_size=128,
+                num_layers=2,
+                batch_first=True,
+                bidirectional=True,
+            )
+            self.fc = nn.Sequential(nn.Linear(128 * 2, 64), nn.ReLU(), nn.Linear(64, num_classes))
+
+        def forward(self, x):
+            x = self.cnn(x).transpose(1, 2)
+            x, _ = self.lstm(x)
+            return self.fc(x[:, -1, :])
+
+
+    class DiagCNNTransformer(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.cnn = nn.Sequential(
+                nn.Conv1d(1, 64, kernel_size=15, stride=2, padding=7),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(2),
+            )
+            encoder_layer = nn.TransformerEncoderLayer(d_model=64, nhead=8, batch_first=True)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(64 * 256, 128),
+                nn.ReLU(),
+                nn.Linear(128, num_classes),
+            )
+
+        def forward(self, x):
+            x = self.cnn(x).transpose(1, 2)
+            x = self.transformer(x)
+            return self.classifier(x)
+
+
+    DIAG_MODEL_BUILDERS = {
+        "1D-CNN": DiagOneDCNN,
+        "WDCNN": DiagWDCNN,
+        "CNN-LSTM": DiagCNNLSTM,
+        "CNN-Transformer": DiagCNNTransformer,
+    }
+else:
+    DIAG_MODEL_BUILDERS = {}
+
+
+def diag_extract_signal_from_mat(mat_data: Dict[str, Any]) -> Any:
+    for key, value in mat_data.items():
+        if str(key).startswith("__"):
+            continue
+        if isinstance(value, np.ndarray) and value.dtype.names is not None:
+            try:
+                if "gs" in value.dtype.names:
+                    arr = np.asarray(value["gs"][0, 0]).squeeze()
+                    if arr.ndim == 1 and arr.size >= 16:
+                        return arr.astype(np.float32)
+            except Exception:
+                pass
+            for field in ["data", "signal", "vibration", "bearing"]:
+                try:
+                    if field in value.dtype.names:
+                        arr = np.asarray(value[field][0, 0]).squeeze()
+                        if arr.ndim == 1 and arr.size >= 16:
+                            return arr.astype(np.float32)
+                except Exception:
+                    continue
+
+    best_score = -1
+    best_arr = None
+    for key, value in mat_data.items():
+        if str(key).startswith("__"):
+            continue
+        arr = np.asarray(value).squeeze()
+        if arr.ndim != 1 or arr.size < 16:
+            continue
+        if not np.issubdtype(arr.dtype, np.number):
+            continue
+        score = int(arr.size)
+        k = str(key).lower()
+        if "de" in k:
+            score += 5000
+        if "fe" in k:
+            score += 3000
+        if score > best_score:
+            best_score = score
+            best_arr = arr.astype(np.float32)
+    if best_arr is None:
+        raise ValueError("MAT 文件中未找到可用的一维振动信号")
+    return best_arr
+
+
+def diag_load_signal_from_mat(file_path: Path) -> Any:
+    mat_data = loadmat(str(file_path))
+    return diag_extract_signal_from_mat(mat_data)
+
+
+def diag_normalize_signal(signal: Any) -> Any:
+    x = np.asarray(signal, dtype=np.float32).reshape(-1)
+    if x.size == 0:
+        raise ValueError("信号为空")
+    if x.size < DIAG_INPUT_LEN:
+        x = np.pad(x, (0, DIAG_INPUT_LEN - x.size), mode="edge")
+    elif x.size > DIAG_INPUT_LEN:
+        x = x[:DIAG_INPUT_LEN]
+    mean = float(np.mean(x))
+    std = float(np.std(x))
+    if std < 1e-8:
+        std = 1.0
+    return (x - mean) / std
+
+
+def diag_validate_dataset_and_model(dataset: str, model: str) -> Dict[str, str]:
+    ds = (dataset or "").strip().upper()
+    if ds not in DIAG_DATASET_ROOTS:
+        raise ValueError("不支持的数据集，仅支持 CWRU 或 MFPT。")
+    model_key = (model or "").strip().lower()
+    canonical = DIAG_MODEL_ALIASES.get(model_key, "")
+    if not canonical:
+        raise ValueError("不支持的模型，仅支持 cnn、cnn-lstm、wdcnn、cnn-transformer。")
+    return {"dataset": ds, "modelKey": model_key, "modelCanonical": canonical}
+
+
+def diag_resolve_model(dataset: str, model_canonical: str):
+    cache_key = f"{dataset}:{model_canonical}"
+    if cache_key in DIAG_MODEL_CACHE:
+        return DIAG_MODEL_CACHE[cache_key]
+
+    if model_canonical not in DIAG_MODEL_BUILDERS:
+        raise ValueError("模型结构不可用")
+    pth_dir = DIAG_PTH_ROOTS[dataset]
+    pth_file = DIAG_MODEL_TO_FILENAME[model_canonical]
+    pth_path = pth_dir / pth_file
+    if not pth_path.exists():
+        raise FileNotFoundError(f"未找到权重文件: {pth_path}")
+
+    class_count = len(DIAG_CLASS_NAMES[dataset])
+    model = DIAG_MODEL_BUILDERS[model_canonical](num_classes=class_count)
+    device = torch.device("cpu")
+    state = torch.load(str(pth_path), map_location=device)
+    if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
+        state = state["state_dict"]
+    if isinstance(state, dict):
+        cleaned = {}
+        for k, v in state.items():
+            nk = k[7:] if str(k).startswith("module.") else k
+            cleaned[nk] = v
+        state = cleaned
+    model.load_state_dict(state, strict=True)
+    model.to(device)
+    model.eval()
+    DIAG_MODEL_CACHE[cache_key] = model
+    return model
+
+
+def diag_list_mat_files(dataset: str) -> List[str]:
+    root = DIAG_DATASET_ROOTS[dataset]
+    files = [p for p in root.rglob("*.mat") if p.is_file()]
+    rels = [str(p.relative_to(root)).replace("\\", "/") for p in files]
+    return sorted(rels)
+
+
+def diag_infer(dataset: str, model_canonical: str, file_path: str) -> Dict[str, Any]:
+    root = DIAG_DATASET_ROOTS[dataset].resolve()
+    target = (root / file_path).resolve()
+    if not str(target).startswith(str(root)):
+        raise ValueError("文件路径越界")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError("样本文件不存在")
+
+    signal = diag_load_signal_from_mat(target)
+    x = diag_normalize_signal(signal)
+    tensor = torch.from_numpy(x).float().unsqueeze(0).unsqueeze(0)
+    model = diag_resolve_model(dataset, model_canonical)
+    with torch.no_grad():
+        logits = model(tensor)
+        probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+    pred_idx = int(np.argmax(probs))
+    labels = DIAG_CLASS_NAMES[dataset]
+    pred_label = labels[pred_idx] if pred_idx < len(labels) else "未知"
+    return {
+        "prediction": pred_label,
+        "predictionIndex": pred_idx,
+        "confidence": float(probs[pred_idx]),
+        "probabilities": [{"label": labels[i], "value": float(probs[i])} for i in range(len(labels))],
+        "filePath": str(file_path),
+        "modelCanonical": model_canonical,
+    }
 
 def ensure_complete_sentences(text: str) -> str:
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -899,7 +1190,7 @@ def build_citation_fallback(
 @app.before_request
 def require_login():
     endpoint = request.endpoint or ""
-    if endpoint in {"login", "static"}:
+    if endpoint in {"login", "register", "static"}:
         return None
     if session.get("logged_in"):
         return None
@@ -911,15 +1202,45 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
+    register_success = ""
+    register_mode = False
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
-        if username == LOGIN_DEFAULT_USER and password == LOGIN_DEFAULT_PASSWORD:
+        user = get_user_by_username(username)
+        if user and check_password_hash(user["password_hash"], password):
             session["logged_in"] = True
-            session["username"] = username
+            session["username"] = user["username"]
+            session["role"] = user["role"]
             return redirect(url_for("index"))
-        error = "用户名或密码错误。默认账号：admin，默认密码：123456"
-    return render_template("login.html", error=error)
+        error = "用户名或密码错误。"
+    if request.args.get("register") == "ok":
+        register_success = "注册成功，请登录。"
+    if request.args.get("mode") == "register":
+        register_mode = True
+    return render_template("login.html", error=error, register_success=register_success, register_mode=register_mode)
+
+
+@app.route("/register", methods=["POST"])
+def register():
+    username = (request.form.get("username") or "").strip()
+    password = (request.form.get("password") or "").strip()
+    role = (request.form.get("role") or "").strip().lower()
+    phone = (request.form.get("phone") or "").strip()
+
+    error = ""
+    if not username or not password or not role:
+        error = "注册信息不完整，请填写用户名、密码与身份类型。"
+    elif role not in {USER_ROLE_USER, USER_ROLE_ADMIN}:
+        error = "身份类型无效，请重新选择。"
+    elif get_user_by_username(username):
+        error = "用户名已存在，请更换。"
+
+    if error:
+        return render_template("login.html", error="", register_error=error, register_mode=True)
+
+    create_user(username=username, password=password, role=role, phone=phone)
+    return redirect(url_for("login", register="ok"))
 
 
 @app.get("/logout")
@@ -930,7 +1251,121 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    role = session.get("role") or USER_ROLE_USER
+    username = session.get("username") or ""
+    return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN), username=username)
+
+
+@app.get("/api/admin/case-module")
+def admin_case_module():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    rows = load_case_rows_from_source(start_line=6, end_line=23)
+    return jsonify(
+        {
+            "columns": ["故障位置", "关联", "后果", "案例来源"],
+            "rows": rows,
+            "source": str(CASE_SOURCE_CSV_PATH.name),
+            "lineRange": "6-23",
+        }
+    )
+
+
+@app.get("/api/admin/csv-files")
+def admin_csv_files():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    files = sorted([p.name for p in CSV_KB_DIR.glob("*.csv")])
+    return jsonify({"files": files, "count": len(files), "folder": str(CSV_KB_DIR)})
+
+
+@app.get("/api/admin/csv-files/<path:filename>")
+def admin_csv_file_detail(filename: str):
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    safe_name = Path(filename).name
+    if not safe_name.lower().endswith(".csv"):
+        return jsonify({"error": "仅支持查看CSV文件"}), 400
+    target = CSV_KB_DIR / safe_name
+    if not target.exists() or not target.is_file():
+        return jsonify({"error": "文件不存在"}), 404
+
+    parsed = read_csv_rows(target)
+    return jsonify(
+        {
+            "file": safe_name,
+            "columns": parsed["columns"],
+            "rows": parsed["rows"],
+            "rowCount": len(parsed["rows"]),
+        }
+    )
+
+
+@app.get("/api/diag/options")
+def diag_options():
+    dep_error = diag_dependencies_ready()
+    return jsonify(
+        {
+            "datasets": [
+                {"key": "CWRU", "label": "CWRU（凯斯西储大学数据集）"},
+                {"key": "MFPT", "label": "MFPT"},
+                {"key": "CUSTOM", "label": "自定义上传"},
+            ],
+            "models": [
+                {"key": "cnn", "label": "CNN"},
+                {"key": "wdcnn", "label": "WDCNN"},
+                {"key": "cnn-lstm", "label": "CNN-LSTM"},
+                {"key": "cnn-transformer", "label": "CNN-Transformer"},
+            ],
+            "customTip": "当前功能开发中",
+            "ready": dep_error is None,
+            "dependencyError": dep_error or "",
+        }
+    )
+
+
+@app.get("/api/diag/files")
+def diag_files():
+    dataset = (request.args.get("dataset", "") or "").strip().upper()
+    if dataset not in {"CWRU", "MFPT"}:
+        return jsonify({"error": "dataset 参数无效，仅支持 CWRU/MFPT。"}), 400
+    root = DIAG_DATASET_ROOTS.get(dataset)
+    if not root or not root.exists():
+        return jsonify({"error": f"未找到数据集目录：{root}"}), 404
+    files = diag_list_mat_files(dataset)
+    return jsonify({"dataset": dataset, "count": len(files), "files": files})
+
+
+@app.post("/api/diag/infer")
+def diag_infer_api():
+    payload = request.get_json(silent=True) or {}
+    dataset = str(payload.get("dataset", "") or "").strip()
+    model = str(payload.get("model", "") or "").strip()
+    file_path = str(payload.get("filePath", "") or "").strip()
+
+    if dataset.upper() == "CUSTOM":
+        return jsonify({"error": "当前功能开发中"}), 400
+
+    dep_error = diag_dependencies_ready()
+    if dep_error:
+        return jsonify({"error": dep_error}), 500
+
+    try:
+        info = diag_validate_dataset_and_model(dataset, model)
+        if not file_path:
+            return jsonify({"error": "缺少样本文件路径"}), 400
+        infer_result = diag_infer(info["dataset"], info["modelCanonical"], file_path)
+        return jsonify(
+            {
+                "ok": True,
+                "dataset": info["dataset"],
+                "model": info["modelKey"],
+                "modelCanonical": info["modelCanonical"],
+                **infer_result,
+            }
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.get("/api/faqs")

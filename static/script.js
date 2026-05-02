@@ -42,6 +42,19 @@ const nodeDetailShrinkBtn = document.getElementById("nodeDetailShrinkBtn");
 const nodeDetailGrowBtn = document.getElementById("nodeDetailGrowBtn");
 const nodeDetailCloseBtn = document.getElementById("nodeDetailCloseBtn");
 const kgConnPanel = document.getElementById("kgConnPanel");
+const kgManageFileList = document.getElementById("kgManageFileList");
+const kgManageDetailTitle = document.getElementById("kgManageDetailTitle");
+const kgManageTableWrap = document.getElementById("kgManageTableWrap");
+const caseModuleMeta = document.getElementById("caseModuleMeta");
+const caseModuleTableWrap = document.getElementById("caseModuleTableWrap");
+const diagDatasetCards = document.getElementById("diagDatasetCards");
+const diagModelButtons = document.getElementById("diagModelButtons");
+const diagFileSelect = document.getElementById("diagFileSelect");
+const diagFileMeta = document.getElementById("diagFileMeta");
+const diagRunBtn = document.getElementById("diagRunBtn");
+const diagResultBody = document.getElementById("diagResultBody");
+const diagCustomTip = document.getElementById("diagCustomTip");
+const diagBackendStatus = document.getElementById("diagBackendStatus");
 
 let selectedImage = null;
 let recognition = null;
@@ -56,6 +69,14 @@ let graphNodesCache = [];
 let graphEdgesCache = [];
 let pinnedNodeId = null;
 let isVoiceListening = false;
+const diagState = {
+  initialized: false,
+  dataset: "",
+  model: "",
+  filePath: "",
+  filesByDataset: {},
+  optionsLoaded: false,
+};
 
 const CHAT_STORAGE_KEY = "industrial_qa_history_v1";
 const CHAT_REQUEST_TIMEOUT_MS = 180000;
@@ -115,6 +136,298 @@ function switchModule(targetId) {
 
   if (targetId === "kgModule") {
     loadGraph();
+  } else if (targetId === "diagModule") {
+    initDiagnosisModule();
+  } else if (targetId === "kgManageModule") {
+    loadAdminCsvFiles();
+  } else if (targetId === "caseModule") {
+    loadAdminCaseModule();
+  }
+}
+
+function updateDiagRunButtonState() {
+  if (!diagRunBtn) return;
+  const ready = Boolean(diagState.dataset && diagState.model && diagState.filePath);
+  diagRunBtn.disabled = !ready;
+  diagRunBtn.classList.toggle("ready", ready);
+}
+
+function setActiveDiagButton(container, attrName, value) {
+  if (!container) return;
+  container.querySelectorAll("button").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute(attrName) === value);
+  });
+}
+
+function resetDiagFileSelect(text = "请先选择数据集") {
+  if (!diagFileSelect) return;
+  diagFileSelect.innerHTML = `<option value="">${text}</option>`;
+  diagFileSelect.disabled = true;
+  diagState.filePath = "";
+  if (diagFileMeta) diagFileMeta.textContent = "当前未选择样本";
+  updateDiagRunButtonState();
+}
+
+function renderDiagResult(result) {
+  if (!diagResultBody) return;
+  const confidence = Number(result.confidence || 0) * 100;
+  const probs = Array.isArray(result.probabilities) ? result.probabilities : [];
+  const top3 = probs
+    .slice()
+    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .slice(0, 3)
+    .map((it) => `${escapeHtml(it.label)}：${(Number(it.value || 0) * 100).toFixed(2)}%`)
+    .join(" | ");
+  diagResultBody.innerHTML = `
+    <div class="diag-result-main">故障类型：${escapeHtml(result.prediction || "未知")}</div>
+    <div class="diag-result-sub">置信度：${confidence.toFixed(2)}%</div>
+    <div class="diag-result-sub">样本文件：${escapeHtml(result.filePath || "-")}</div>
+    <div class="diag-result-sub">模型：${escapeHtml(result.modelCanonical || "-")}</div>
+    <div class="diag-result-sub">Top3 概率：${top3 || "-"}</div>
+  `;
+}
+
+async function loadDiagFiles(dataset) {
+  if (!diagFileSelect) return;
+  if (diagState.filesByDataset[dataset]) {
+    const cached = diagState.filesByDataset[dataset];
+    diagFileSelect.innerHTML = `<option value="">请选择样本文件</option>${cached
+      .map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`)
+      .join("")}`;
+    diagFileSelect.disabled = false;
+    return;
+  }
+  diagFileSelect.innerHTML = "<option value=''>正在加载样本...</option>";
+  diagFileSelect.disabled = true;
+  const res = await fetch(`/api/diag/files?dataset=${encodeURIComponent(dataset)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || "样本加载失败");
+  }
+  const files = Array.isArray(data.files) ? data.files : [];
+  diagState.filesByDataset[dataset] = files;
+  diagFileSelect.innerHTML = `<option value="">请选择样本文件</option>${files
+    .map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`)
+    .join("")}`;
+  diagFileSelect.disabled = files.length === 0;
+  if (!files.length && diagFileMeta) {
+    diagFileMeta.textContent = "该数据集下未找到 .mat 样本";
+  }
+}
+
+async function ensureDiagOptions() {
+  if (diagState.optionsLoaded || !diagBackendStatus) return;
+  try {
+    const res = await fetch("/api/diag/options");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "加载失败");
+    if (data.ready) {
+      diagBackendStatus.textContent = "推理状态：就绪";
+    } else {
+      diagBackendStatus.textContent = `推理状态：${data.dependencyError || "依赖缺失"}`;
+    }
+    diagState.optionsLoaded = true;
+  } catch (e) {
+    diagBackendStatus.textContent = "推理状态：接口不可用";
+  }
+}
+
+function initDiagnosisModule() {
+  if (!diagDatasetCards || !diagModelButtons || !diagFileSelect || !diagRunBtn) return;
+  ensureDiagOptions();
+  if (diagState.initialized) return;
+  diagState.initialized = true;
+
+  diagDatasetCards.querySelectorAll(".diag-card").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const dataset = btn.getAttribute("data-dataset") || "";
+      diagState.dataset = dataset;
+      diagState.filePath = "";
+      setActiveDiagButton(diagDatasetCards, "data-dataset", dataset);
+      if (diagCustomTip) diagCustomTip.classList.toggle("hidden", dataset !== "CUSTOM");
+      if (dataset === "CUSTOM") {
+        resetDiagFileSelect("当前功能开发中");
+        if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：当前功能开发中";
+        return;
+      }
+      if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：正在加载样本列表...";
+      try {
+        await loadDiagFiles(dataset);
+        if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：就绪";
+      } catch (e) {
+        resetDiagFileSelect("样本加载失败");
+        if (diagBackendStatus) diagBackendStatus.textContent = `推理状态：${e.message || "失败"}`;
+      }
+      updateDiagRunButtonState();
+    });
+  });
+
+  diagModelButtons.querySelectorAll(".diag-seg").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const model = btn.getAttribute("data-model") || "";
+      diagState.model = model;
+      setActiveDiagButton(diagModelButtons, "data-model", model);
+      updateDiagRunButtonState();
+    });
+  });
+
+  diagFileSelect.addEventListener("change", () => {
+    diagState.filePath = diagFileSelect.value || "";
+    if (diagFileMeta) {
+      diagFileMeta.textContent = diagState.filePath ? `当前样本：${diagState.filePath}` : "当前未选择样本";
+    }
+    updateDiagRunButtonState();
+  });
+
+  diagRunBtn.addEventListener("click", async () => {
+    if (diagRunBtn.disabled) return;
+    diagRunBtn.disabled = true;
+    diagRunBtn.textContent = "诊断中...";
+    if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：处理中...";
+    try {
+      const res = await fetch("/api/diag/infer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dataset: diagState.dataset,
+          model: diagState.model,
+          filePath: diagState.filePath,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || "推理失败");
+      }
+      renderDiagResult(data);
+      if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：完成";
+    } catch (e) {
+      if (diagResultBody) {
+        diagResultBody.textContent = `诊断失败：${e.message || "未知错误"}`;
+      }
+      if (diagBackendStatus) diagBackendStatus.textContent = "推理状态：失败";
+    } finally {
+      diagRunBtn.textContent = "开始诊断";
+      updateDiagRunButtonState();
+    }
+  });
+
+  resetDiagFileSelect("请先选择数据集");
+  updateDiagRunButtonState();
+}
+
+function renderAdminTable(container, columns, rows) {
+  if (!container) {
+    return;
+  }
+  if (!Array.isArray(columns) || columns.length === 0) {
+    container.innerHTML = "<div class='admin-empty'>当前文件无可展示列。</div>";
+    return;
+  }
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const thead = `<tr>${columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>`;
+  const tbody = safeRows.length
+    ? safeRows
+        .map((row) => {
+          if (Array.isArray(row)) {
+            return `<tr>${columns.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`;
+          }
+          return `<tr>${columns.map((c) => `<td>${escapeHtml((row && row[c]) ?? "")}</td>`).join("")}</tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="${columns.length}">暂无数据</td></tr>`;
+  container.innerHTML = `<div class="admin-table-scroll"><table class="admin-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+}
+
+async function loadAdminCaseModule() {
+  if (!caseModuleTableWrap) {
+    return;
+  }
+  caseModuleTableWrap.innerHTML = "<div class='admin-empty'>正在加载案例数据...</div>";
+  try {
+    const res = await fetch("/api/admin/case-module");
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      caseModuleTableWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "加载失败")}</div>`;
+      return;
+    }
+    if (caseModuleMeta) {
+      caseModuleMeta.textContent = `来源：${data.source || "-"} | 行范围：${data.lineRange || "-"} | 条数：${(data.rows || []).length}`;
+    }
+    renderAdminTable(caseModuleTableWrap, data.columns || [], data.rows || []);
+  } catch (e) {
+    caseModuleTableWrap.innerHTML = "<div class='admin-empty'>案例数据加载失败。</div>";
+  }
+}
+
+async function loadAdminCsvFileDetail(filename) {
+  if (!kgManageTableWrap || !kgManageDetailTitle) {
+    return;
+  }
+  kgManageDetailTitle.textContent = `正在加载：${filename}`;
+  kgManageTableWrap.innerHTML = "<div class='admin-empty'>正在读取CSV内容...</div>";
+  try {
+    const res = await fetch(`/api/admin/csv-files/${encodeURIComponent(filename)}`);
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      kgManageTableWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "读取失败")}</div>`;
+      return;
+    }
+    kgManageDetailTitle.textContent = `${data.file}（数据行 ${data.rowCount || 0}）`;
+    renderAdminTable(kgManageTableWrap, data.columns || [], data.rows || []);
+  } catch (e) {
+    kgManageTableWrap.innerHTML = "<div class='admin-empty'>CSV内容加载失败。</div>";
+  }
+}
+
+async function loadAdminCsvFiles() {
+  if (!kgManageFileList || !kgManageTableWrap || !kgManageDetailTitle) {
+    return;
+  }
+  kgManageFileList.innerHTML = "<div class='admin-empty'>正在加载CSV文件列表...</div>";
+  try {
+    const res = await fetch("/api/admin/csv-files");
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      kgManageFileList.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "加载失败")}</div>`;
+      return;
+    }
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (files.length === 0) {
+      kgManageFileList.innerHTML = "<div class='admin-empty'>未发现CSV文件。</div>";
+      kgManageTableWrap.innerHTML = "";
+      kgManageDetailTitle.textContent = "暂无可查看文件";
+      return;
+    }
+    kgManageFileList.innerHTML = files
+      .map((f) => `<button class="admin-file-item" data-file="${escapeHtml(f)}">${escapeHtml(f)}</button>`)
+      .join("");
+    kgManageFileList.querySelectorAll(".admin-file-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const picked = btn.getAttribute("data-file") || "";
+        kgManageFileList.querySelectorAll(".admin-file-item").forEach((node) => node.classList.remove("active"));
+        btn.classList.add("active");
+        loadAdminCsvFileDetail(picked);
+      });
+    });
+    const firstBtn = kgManageFileList.querySelector(".admin-file-item");
+    if (firstBtn) {
+      firstBtn.classList.add("active");
+      await loadAdminCsvFileDetail(firstBtn.getAttribute("data-file") || "");
+    }
+  } catch (e) {
+    kgManageFileList.innerHTML = "<div class='admin-empty'>CSV文件列表加载失败。</div>";
   }
 }
 

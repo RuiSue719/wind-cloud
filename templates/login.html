@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>登录 - 风电设备故障检测一体化问答系统</title>
+  <title>登录 - 风电设备故障诊断一体化问答系统</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
@@ -12,8 +12,10 @@
 <body>
   <main class="login-shell">
     <section class="login-hero">
-      <h1>风脉智诊：基于知识图谱增强生成的风电设备故障诊断问答系统</h1>
-      <p>面向风电运维场景的轻量化智能问答解决方案</p>
+      <div class="hero-title-group">
+        <h1 class="hero-main-title">风诊智答——风电设备故障诊断一体化问答系统</h1>
+      </div>
+      <p class="hero-desc">面向风电运维场景的轻量化智能问答解决方案</p>
 
       <h3 class="login-section-title">系统功能模块</h3>
 
@@ -25,10 +27,6 @@
         <article class="login-feature-card">
           <h3>检索增强问答</h3>
           <p>融合 Neo4j 图谱三元组与本地运维手册，生成可追溯的故障排查建议。</p>
-        </article>
-        <article class="login-feature-card">
-          <h3>离线部署支持</h3>
-          <p>基于 Ollama 本地大模型，支持无网络环境下的稳定推理。</p>
         </article>
       </div>
 
@@ -42,15 +40,58 @@
     </section>
 
     <section class="login-panel">
-      <h2>欢迎登录</h2>
-      <p class="login-tip">默认用户名：admin，默认密码：123456</p>
+      <div class="login-card-head">
+        <div class="login-logo" aria-hidden="true">💊</div>
+        <h2>欢迎回来</h2>
+        <p>请登录您的账户以继续使用系统</p>
+      </div>
+
       {% if error %}
       <div class="login-error">{{ error }}</div>
       {% endif %}
-      <form method="post" class="login-form">
-        <input name="username" type="text" placeholder="请输入用户名" required />
-        <input name="password" type="password" placeholder="请输入密码" required />
+      {% if register_success %}
+      <div class="login-error login-success">{{ register_success }}</div>
+      {% endif %}
+
+      <form method="post" class="login-form login-form-login {% if register_mode %}hidden{% endif %}" id="loginForm">
+        <div class="login-input">
+          <span class="login-icon">👤</span>
+          <input name="username" type="text" placeholder="请输入用户名" required />
+        </div>
+        <div class="login-input">
+          <span class="login-icon">🔒</span>
+          <input name="password" type="password" placeholder="请输入密码" required />
+        </div>
         <button type="submit" class="login-btn">立即登录</button>
+        <div class="login-switch">还没有账户？ <a href="/login?mode=register" id="showRegister">立即注册</a></div>
+      </form>
+
+      {% if register_error %}
+      <div class="login-error">{{ register_error }}</div>
+      {% endif %}
+      <form method="post" action="/register" class="login-form login-form-register {% if not register_mode %}hidden{% endif %}" id="registerForm">
+        <div class="login-input">
+          <span class="login-icon">👤</span>
+          <input name="username" type="text" placeholder="用户名（登录凭证）" required />
+        </div>
+        <div class="login-input">
+          <span class="login-icon">🔒</span>
+          <input name="password" type="password" placeholder="密码（安全认证）" required />
+        </div>
+        <div class="login-input">
+          <span class="login-icon">🧭</span>
+          <select name="role" required>
+            <option value="" disabled selected>请选择身份类型（必选）</option>
+            <option value="user">现场运维工程师（普通用户）</option>
+            <option value="admin">诊断专家 / 管理者（管理员）</option>
+          </select>
+        </div>
+        <div class="login-input">
+          <span class="login-icon">☎️</span>
+          <input name="phone" type="text" placeholder="联系电话（可选）" />
+        </div>
+        <button type="submit" class="login-btn">立即注册</button>
+        <div class="login-switch">已有账户？ <a href="/login" id="showLogin">返回登录</a></div>
       </form>
     </section>
   </main>

@@ -271,6 +271,11 @@ body {
   overflow: auto;
 }
 
+#diagModule {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 #qaModule .welcome-card {
   margin-top: 2px;
 }

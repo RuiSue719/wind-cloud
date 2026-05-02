@@ -915,6 +915,32 @@ if nn is not None:
             return self.net(x)
 
 
+    class DiagOneDCNN_MFPT(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv1d(1, 64, kernel_size=11, padding=5),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(4),
+                nn.Conv1d(64, 128, kernel_size=3, padding=1),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.MaxPool1d(4),
+            )
+            self.fc = nn.Sequential(
+                nn.Linear(128 * 64, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_classes),
+            )
+
+        def forward(self, x):
+            x = self.net(x)
+            x = x.flatten(1)
+            return self.fc(x)
+
+
     class DiagWDCNN(nn.Module):
         def __init__(self, num_classes: int) -> None:
             super().__init__()
@@ -941,6 +967,35 @@ if nn is not None:
 
         def forward(self, x):
             return self.layer2(self.layer1(x))
+
+
+    class DiagWDCNN_MFPT(nn.Module):
+        def __init__(self, num_classes: int) -> None:
+            super().__init__()
+            self.features = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size=64, stride=16, padding=24),
+                nn.BatchNorm1d(16),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+                nn.Conv1d(16, 32, 3, padding=1),
+                nn.BatchNorm1d(32),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+                nn.Conv1d(32, 64, 3, padding=1),
+                nn.BatchNorm1d(64),
+                nn.ReLU(),
+                nn.MaxPool1d(2, 2),
+            )
+            self.fc = nn.Sequential(
+                nn.Linear(64 * 8, 256),
+                nn.ReLU(),
+                nn.Linear(256, num_classes),
+            )
+
+        def forward(self, x):
+            x = self.features(x)
+            x = x.flatten(1)
+            return self.fc(x)
 
 
     class DiagCNNLSTM(nn.Module):
@@ -1091,7 +1146,12 @@ def diag_resolve_model(dataset: str, model_canonical: str):
         raise FileNotFoundError(f"未找到权重文件: {pth_path}")
 
     class_count = len(DIAG_CLASS_NAMES[dataset])
-    model = DIAG_MODEL_BUILDERS[model_canonical](num_classes=class_count)
+    if dataset == "MFPT" and model_canonical == "1D-CNN":
+        model = DiagOneDCNN_MFPT(num_classes=class_count)
+    elif dataset == "MFPT" and model_canonical == "WDCNN":
+        model = DiagWDCNN_MFPT(num_classes=class_count)
+    else:
+        model = DIAG_MODEL_BUILDERS[model_canonical](num_classes=class_count)
     device = torch.device("cpu")
     state = torch.load(str(pth_path), map_location=device)
     if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):

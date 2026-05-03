@@ -121,6 +121,8 @@ let graphEdgesDataSet = null;
 let graphNodesCache = [];
 let graphEdgesCache = [];
 let pinnedNodeId = null;
+let graphAutoRetryTimer = null;
+let graphAutoRetryCount = 0;
 let isVoiceListening = false;
 const diagState = {
   initialized: false,
@@ -194,6 +196,27 @@ function renderCitation() {
   `;
   const clearBtn = document.getElementById("citationClearBtn");
   clearBtn?.addEventListener("click", clearCitation);
+}
+
+function scheduleGraphAutoRetry() {
+  if (graphAutoRetryTimer) {
+    return;
+  }
+  const delayMs = Math.min(12000, 2000 * (graphAutoRetryCount + 1));
+  graphAutoRetryTimer = window.setTimeout(async () => {
+    graphAutoRetryTimer = null;
+    graphAutoRetryCount += 1;
+    await loadStatus();
+    await loadGraph();
+  }, delayMs);
+}
+
+function clearGraphAutoRetry() {
+  if (graphAutoRetryTimer) {
+    window.clearTimeout(graphAutoRetryTimer);
+    graphAutoRetryTimer = null;
+  }
+  graphAutoRetryCount = 0;
 }
 
 function switchModule(targetId) {
@@ -1948,8 +1971,10 @@ async function loadGraph() {
 
     if (!data.nodes || data.nodes.length === 0) {
       graphCanvas.textContent = `当前未从 Neo4j 读取到关系数据。${data.error || "请先检查数据库连接与图谱内容。"}`;
+      scheduleGraphAutoRetry();
       return;
     }
+    clearGraphAutoRetry();
 
     graphNodesCache = (data.nodes || []).map((n) => ({ ...n, title: "查看详情" }));
     graphEdgesCache = (data.edges || []).map((e, idx) => ({ ...e, id: e.id || `e_${idx}` }));
@@ -2036,6 +2061,7 @@ async function loadGraph() {
     resetGraphFocus();
   } catch (e) {
     graphCanvas.textContent = "图谱加载失败，请检查后端服务或 Neo4j 连接状态。";
+    scheduleGraphAutoRetry();
   }
 }
 

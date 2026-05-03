@@ -4,6 +4,7 @@ import os
 import time
 import csv
 import sqlite3
+import threading
 from collections import Counter
 from datetime import datetime
 from dataclasses import dataclass
@@ -492,6 +493,7 @@ class Neo4jService:
         self.database = database
         self._driver = None
         self.last_error = ""
+        self._lock = threading.Lock()
 
     def update_config(self, uri: str, user: str, password: str, database: str) -> None:
         self.uri = uri or self.uri
@@ -507,50 +509,81 @@ class Neo4jService:
         self.last_error = ""
 
     def _driver_or_none(self):
-        if self._driver is not None:
-            return self._driver
-        try:
-            self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
-            self._driver.verify_connectivity()
-            self.last_error = ""
-            return self._driver
-        except Exception as exc:
-            self._driver = None
-            err_text = str(exc)
-            self.last_error = err_text
-            unauthorized = "unauthorized" in err_text.lower() or "authentication failure" in err_text.lower()
-            should_try_fallback = unauthorized and (
-                self.uri != NEO4J_URI_FALLBACK
-                or self.user != NEO4J_USER_FALLBACK
-                or self.password != NEO4J_PASSWORD_FALLBACK
-                or self.database != NEO4J_DATABASE_FALLBACK
-            )
-            if should_try_fallback:
-                try:
-                    self.uri = NEO4J_URI_FALLBACK
-                    self.user = NEO4J_USER_FALLBACK
-                    self.password = NEO4J_PASSWORD_FALLBACK
-                    self.database = NEO4J_DATABASE_FALLBACK
-                    self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
-                    self._driver.verify_connectivity()
-                    self.last_error = ""
-                    return self._driver
-                except Exception as fallback_exc:
-                    self._driver = None
-                    self.last_error = str(fallback_exc)
-            return None
+        with self._lock:
+            if self._driver is not None:
+                return self._driver
+            try:
+                self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+                self._driver.verify_connectivity()
+                self.last_error = ""
+                return self._driver
+            except Exception as exc:
+                self._driver = None
+                err_text = str(exc)
+                self.last_error = err_text
+                unauthorized = "unauthorized" in err_text.lower() or "authentication failure" in err_text.lower()
+                should_try_fallback = unauthorized and (
+                    self.uri != NEO4J_URI_FALLBACK
+                    or self.user != NEO4J_USER_FALLBACK
+                    or self.password != NEO4J_PASSWORD_FALLBACK
+                    or self.database != NEO4J_DATABASE_FALLBACK
+                )
+                if should_try_fallback:
+                    try:
+                        self.uri = NEO4J_URI_FALLBACK
+                        self.user = NEO4J_USER_FALLBACK
+                        self.password = NEO4J_PASSWORD_FALLBACK
+                        self.database = NEO4J_DATABASE_FALLBACK
+                        self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+                        self._driver.verify_connectivity()
+                        self.last_error = ""
+                        return self._driver
+                    except Exception as fallback_exc:
+                        self._driver = None
+                        self.last_error = str(fallback_exc)
+                return None
+
+    def _driver_with_retries(self, retries: int = 3, interval_sec: float = 0.8):
+        retries = max(1, int(retries))
+        for idx in range(retries):
+            driver = self._driver_or_none()
+            if driver is not None:
+                return driver
+            if idx < retries - 1:
+                time.sleep(max(0.1, float(interval_sec)))
+        return None
 
     def available(self) -> bool:
-        return self._driver_or_none() is not None
+        return self._driver_with_retries(retries=2, interval_sec=0.6) is not None
 
     def run_read(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        driver = self._driver_or_none()
+        params = params or {}
+        driver = self._driver_with_retries(retries=3, interval_sec=0.8)
         if driver is None:
             return []
-        params = params or {}
-        with driver.session(database=self.database) as session:
-            result = session.run(query, params)
-            return [record.data() for record in result]
+        try:
+            with driver.session(database=self.database) as session:
+                result = session.run(query, params)
+                return [record.data() for record in result]
+        except Exception as exc:
+            self.last_error = str(exc)
+            with self._lock:
+                if self._driver is not None:
+                    try:
+                        self._driver.close()
+                    except Exception:
+                        pass
+                    self._driver = None
+            retry_driver = self._driver_with_retries(retries=3, interval_sec=0.8)
+            if retry_driver is None:
+                return []
+            try:
+                with retry_driver.session(database=self.database) as session:
+                    result = session.run(query, params)
+                    return [record.data() for record in result]
+            except Exception as retry_exc:
+                self.last_error = str(retry_exc)
+                return []
 
     def count_nodes(self) -> int:
         rows = self.run_read("MATCH (n) RETURN count(n) AS cnt")
@@ -565,19 +598,19 @@ class Neo4jService:
         rows = self.run_read(
             """
             MATCH (n)-[r]->(m)
-            RETURN id(n) AS source_id,
-                   coalesce(n.name, n.title, labels(n)[0] + '_' + toString(id(n))) AS source_name,
+            RETURN elementId(n) AS source_id,
+                   coalesce(n.name, n.title, labels(n)[0] + '_' + elementId(n)) AS source_name,
                    labels(n) AS source_labels,
                    type(r) AS rel_type,
-                   id(m) AS target_id,
-                   coalesce(m.name, m.title, labels(m)[0] + '_' + toString(id(m))) AS target_name,
+                   elementId(m) AS target_id,
+                   coalesce(m.name, m.title, labels(m)[0] + '_' + elementId(m)) AS target_name,
                    labels(m) AS target_labels
             LIMIT $limit
             """,
             {"limit": max(10, min(limit, 500))},
         )
 
-        nodes_map: Dict[int, Dict[str, Any]] = {}
+        nodes_map: Dict[str, Dict[str, Any]] = {}
         edges: List[Dict[str, Any]] = []
 
         for row in rows:
@@ -600,11 +633,11 @@ class Neo4jService:
 
         return {"nodes": list(nodes_map.values()), "edges": edges, "error": self.last_error}
 
-    def get_node_neighbors(self, node_id: int, limit: int = 15) -> List[Dict[str, str]]:
+    def get_node_neighbors(self, node_id: str, limit: int = 15) -> List[Dict[str, str]]:
         rows = self.run_read(
             """
             MATCH (n)-[r]-(m)
-            WHERE id(n) = $node_id
+            WHERE elementId(n) = $node_id
             RETURN coalesce(n.name, n.title, labels(n)[0]) AS center,
                    type(r) AS rel,
                    coalesce(m.name, m.title, labels(m)[0]) AS neighbor
@@ -634,11 +667,11 @@ class Neo4jService:
         )
         return [{"head": r["head"], "rel": r["rel"], "tail": r["tail"]} for r in rows]
 
-    def get_node_label(self, node_id: int) -> str:
+    def get_node_label(self, node_id: str) -> str:
         rows = self.run_read(
             """
             MATCH (n)
-            WHERE id(n) = $node_id
+            WHERE elementId(n) = $node_id
             RETURN coalesce(n.name, n.title, labels(n)[0]) AS label
             LIMIT 1
             """,
@@ -803,6 +836,19 @@ kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
 cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
+
+
+def warmup_neo4j_async(retries: int = 6, interval_sec: float = 2.0) -> None:
+    def _worker():
+        for _ in range(max(1, retries)):
+            if neo4j_service.available():
+                return
+            time.sleep(max(0.2, interval_sec))
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+warmup_neo4j_async()
 
 
 def _db_connect():
@@ -2109,9 +2155,9 @@ def kg_search():
 
 @app.get("/api/kg/node")
 def kg_node():
-    node_id = request.args.get("id", type=int)
+    node_id = (request.args.get("id", default="", type=str) or "").strip()
     node_label = (request.args.get("label", default="", type=str) or "").strip()
-    if node_id is None:
+    if not node_id:
         return jsonify({"triplets": [], "error": "缺少节点ID参数"}), 400
     triplets = neo4j_service.get_node_neighbors(node_id=node_id, limit=15)
     if not node_label:

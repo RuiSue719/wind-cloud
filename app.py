@@ -50,14 +50,10 @@ OLLAMA_NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", str(max(2, (os.cpu_count(
 OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "0" if OLLAMA_FORCE_CPU else "1"))
 '''
 
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://d2ad0ef8.databases.neo4j.io")
-NEO4J_USER = os.getenv("NEO4J_USER", "d2ad0ef8")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "xbTpmrOemDMi4JvGvdnVz55oznmMppoC6tRcQ5yZGw")
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "d2ad0ef8")
-NEO4J_URI_FALLBACK = "neo4j+s://d2ad0ef8.databases.neo4j.io"
-NEO4J_USER_FALLBACK = "d2ad0ef8"
-NEO4J_PASSWORD_FALLBACK = "xbTpmrOemDMi4JvGvdnVz55oznmMppoC6tRcQ5yZGw"
-NEO4J_DATABASE_FALLBACK = "d2ad0ef8"
+NEO4J_URI = "neo4j+s://01a0e5bf.databases.neo4j.io"
+NEO4J_USER = "01a0e5bf"
+NEO4J_PASSWORD = "JZ920NcZWJmZe3Cc3WjYNouz7hOvk1Qxr8XfPSPRjXU"
+NEO4J_DATABASE = "01a0e5bf"
 
 # 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
@@ -496,7 +492,6 @@ class Neo4jService:
         self._lock = threading.Lock()
 
     def update_config(self, uri: str, user: str, password: str, database: str) -> None:
-        # 强制重置所有配置，销毁旧连接
         self.uri = uri
         self.user = user
         self.password = password
@@ -505,7 +500,6 @@ class Neo4jService:
         self.last_error = ""
 
     def _close_driver(self):
-        """优雅关闭驱动，避免残留连接"""
         with self._lock:
             if self._driver:
                 try:
@@ -515,22 +509,20 @@ class Neo4jService:
             self._driver = None
 
     def _driver_or_none(self):
-        """仅在需要时尝试连接一次，不重试、不触发限流"""
         with self._lock:
             if self._driver is not None:
                 return self._driver
             try:
-                # ✅ 关键修复：删除 encrypted/trust 参数，仅保留 URI 为 neo4j+s://
+                # 只创建一次驱动，不设置冲突参数
                 self._driver = GraphDatabase.driver(
                     self.uri,
                     auth=(self.user, self.password),
-                    connection_timeout=20,         # 仅保留超时配置，避免无限等待
-                    max_connection_lifetime=3600  # 连接生命周期，防止Aura主动断开
+                    connection_timeout=20,
+                    max_connection_lifetime=3600
                 )
-                # 验证连接（必须指定 database）
                 self._driver.verify_connectivity(database=self.database)
                 self.last_error = ""
-                print(f"[Neo4j] ✅ 连接成功！数据库：{self.database}")
+                print(f"[Neo4j] ✅ 连接成功！")
                 return self._driver
             except Exception as exc:
                 self.last_error = str(exc)
@@ -539,7 +531,6 @@ class Neo4jService:
                 return None
 
     def available(self) -> bool:
-        # 仅尝试一次连接，绝不重试
         return self._driver_or_none() is not None
 
     def run_read(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -553,18 +544,13 @@ class Neo4jService:
                 return [record.data() for record in result]
         except Exception as exc:
             self.last_error = str(exc)
-            # 连接失败时仅重置一次，不重试
             self._close_driver()
             return []
 
+    # 下面的 count_nodes、get_graph 等方法保持不变
     def count_nodes(self) -> int:
         rows = self.run_read("MATCH (n) RETURN count(n) AS cnt")
-        if not rows:
-            return 0
-        try:
-            return int(rows[0].get("cnt", 0) or 0)
-        except Exception:
-            return 0
+        return int(rows[0]["cnt"]) if rows else 0
 
     def get_graph(self, limit: int = 120) -> Dict[str, Any]:
         rows = self.run_read(
@@ -581,28 +567,15 @@ class Neo4jService:
             """,
             {"limit": max(10, min(limit, 500))},
         )
-
-        nodes_map: Dict[str, Dict[str, Any]] = {}
-        edges: List[Dict[str, Any]] = []
-
+        nodes_map = {}
+        edges = []
         for row in rows:
-            s_id = row["source_id"]
-            t_id = row["target_id"]
-
+            s_id, t_id = row["source_id"], row["target_id"]
             if s_id not in nodes_map:
-                nodes_map[s_id] = {
-                    "id": s_id,
-                    "label": row["source_name"],
-                    "group": ":".join(row.get("source_labels") or ["Node"]),
-                }
+                nodes_map[s_id] = {"id": s_id, "label": row["source_name"], "group": ":".join(row["source_labels"])}
             if t_id not in nodes_map:
-                nodes_map[t_id] = {
-                    "id": t_id,
-                    "label": row["target_name"],
-                    "group": ":".join(row.get("target_labels") or ["Node"]),
-                }
+                nodes_map[t_id] = {"id": t_id, "label": row["target_name"], "group": ":".join(row["target_labels"])}
             edges.append({"from": s_id, "to": t_id, "label": row["rel_type"]})
-
         return {"nodes": list(nodes_map.values()), "edges": edges, "error": self.last_error}
 
     def get_node_neighbors(self, node_id: str, limit: int = 15) -> List[Dict[str, str]]:
@@ -623,7 +596,6 @@ class Neo4jService:
         key = (keyword or "").strip()
         if not key:
             return []
-
         rows = self.run_read(
             """
             MATCH (a)-[r]->(b)
@@ -649,9 +621,7 @@ class Neo4jService:
             """,
             {"node_id": node_id},
         )
-        if not rows:
-            return ""
-        return str(rows[0].get("label") or "").strip()
+        return str(rows[0]["label"]) if rows else ""
 
 class CloudLLMService:
     def __init__(self, api_key: str, default_model: str) -> None:

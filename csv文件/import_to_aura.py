@@ -3,9 +3,9 @@ import os
 from neo4j import GraphDatabase
 
 # ========== 修改这里 ==========
-AURA_URI = "neo4j+s://d2ad0ef8.databases.neo4j.io"   # 你的 AuraDB URL
-AURA_USER = "d2ad0ef8"
-AURA_PASSWORD = "xbTpmrOemDMi4JvGvdnVz55ozznmMppoC6tRcQ5yZGw"
+AURA_URI = "neo4j+s://01a0e5bf.databases.neo4j.io"   # 你的 AuraDB URL
+AURA_USER = "01a0e5bf"
+AURA_PASSWORD = "JZ920NcZWJmZe3Cc3WjYNouz7hOvk1Qxr8XfPSPRjXU"
 CSV_DIR = "./"  # CSV 文件所在的文件夹，当前目录就用 "."
 # ==============================
 

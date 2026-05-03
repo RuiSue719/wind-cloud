@@ -88,14 +88,17 @@
 
       <section class="home-feature-grid">
         <article class="home-feature-card">
+          <span class="home-card-icon">💬</span>
           <h3>知识图谱交互</h3>
           <p>可视化展示设备故障关系网络，支持节点检索与点击联动问答。</p>
         </article>
         <article class="home-feature-card">
+          <span class="home-card-icon">🧠</span>
           <h3>检索增强问答</h3>
           <p>融合 Neo4j 图谱三元组与本地运维手册，生成可追溯的故障排查建议。</p>
         </article>
         <article class="home-feature-card">
+          <span class="home-card-icon">🩺</span>
           <h3>数据诊断</h3>
           <p>使用预训练模型完成轴承故障类型推理，实时性强，置信度高。</p>
         </article>
@@ -108,18 +111,22 @@
 
       <section class="home-adv-grid">
         <article class="home-adv-card">
+          <span class="home-card-icon">🤖</span>
           <h4>图谱增强</h4>
           <p>解决纯文本问答的逻辑缺失问题，回答更专业。</p>
         </article>
         <article class="home-adv-card">
+          <span class="home-card-icon">📊</span>
           <h4>低资源适配</h4>
           <p>轻量化模型与 CPU 友好设计，降低部署门槛。</p>
         </article>
         <article class="home-adv-card">
+          <span class="home-card-icon">🛡️</span>
           <h4>场景化优化</h4>
           <p>针对风电运维场景定制，输出结构化、可落地的诊断结果。</p>
         </article>
         <article class="home-adv-card">
+          <span class="home-card-icon">🚀</span>
           <h4>快速响应</h4>
           <p>模块协同工作，缩短定位时间，提高排查效率。</p>
         </article>
@@ -189,29 +196,22 @@
         <p>图谱来自 Neo4j，支持关系浏览与关键词三元组检索。</p>
       </section>
 
-      <section id="kgConnPanel" class="kg-conn">
-        <input id="neo4jUri" type="text" placeholder="Neo4j URI，例如 bolt://127.0.0.1:7687" />
-        <input id="neo4jUser" type="text" placeholder="用户名" />
-        <input id="neo4jPassword" type="password" placeholder="密码" />
-        <input id="neo4jDatabase" type="text" placeholder="数据库名" />
-        <button id="neo4jConnectBtn" class="ghost-btn">连接Neo4j</button>
-      </section>
-
       <section class="kg-toolbar">
         <input id="kgKeyword" type="text" placeholder="输入关键词检索三元组，如：轴承、故障、温度" />
         <button id="kgSearchBtn" class="ghost-btn">检索</button>
         <button id="kgReloadBtn" class="ghost-btn">刷新图谱</button>
       </section>
-
-      <section class="graph-wrap">
-        <section id="graphCanvas" class="graph-canvas"></section>
-        <div class="graph-zoom-controls">
-          <button id="graphZoomInBtn" class="graph-zoom-btn" type="button">+</button>
-          <button id="graphZoomOutBtn" class="graph-zoom-btn" type="button">-</button>
-        </div>
-        <button id="graphHoverAction" class="graph-hover-action hidden" type="button">双击查看详情</button>
+      <section class="kg-workspace">
+        <section class="graph-wrap">
+          <section id="graphCanvas" class="graph-canvas"></section>
+          <div class="graph-zoom-controls">
+            <button id="graphZoomInBtn" class="graph-zoom-btn" type="button">+</button>
+            <button id="graphZoomOutBtn" class="graph-zoom-btn" type="button">-</button>
+          </div>
+          <button id="graphHoverAction" class="graph-hover-action hidden" type="button">双击查看详情</button>
+        </section>
+        <section id="tripletList" class="triplet-list"></section>
       </section>
-      <section id="tripletList" class="triplet-list"></section>
       </main>
 
       <main id="diagModule" class="content module">
@@ -335,7 +335,7 @@
             <label>确认密码<input id="profileConfirmPwdInput" type="password" /></label>
           </div>
           <div class="profile-actions">
-            <button id="profilePwdBtn" class="send-btn" type="button">修改密码</button>
+            <button id="profilePwdBtn" class="rect-primary-btn" type="button">修改密码</button>
           </div>
           <div id="profilePwdMessage" class="profile-msg"></div>
         </section>
@@ -368,7 +368,7 @@
       </section>
       <section class="admin-case-card">
         <div class="case-toolbar">
-          <button id="caseAddBtn" class="send-btn" type="button">添加记录</button>
+          <button id="caseAddBtn" class="rect-primary-btn" type="button">添加记录</button>
           <select id="caseSourceFilter" class="case-input">
             <option value="">全部来源</option>
           </select>
@@ -445,7 +445,7 @@
       </div>
 
       <div class="case-modal-actions">
-        <button id="caseModalSaveBtn" class="send-btn" type="button">保存</button>
+        <button id="caseModalSaveBtn" class="rect-primary-btn" type="button">保存</button>
       </div>
       <div id="caseModalMessage" class="profile-msg"></div>
     </div>

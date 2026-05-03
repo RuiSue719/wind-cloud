@@ -279,6 +279,7 @@ body {
 #homeModule {
   overflow-y: auto;
   overflow-x: hidden;
+  padding-bottom: 64px;
 }
 
 #consoleModule {
@@ -444,7 +445,7 @@ body {
 
 .home-hero-left h1 {
   margin: 0;
-  font-size: clamp(30px, 3.6vw, 52px);
+  font-size: clamp(24px, 2.6vw, 38px);
   line-height: 1.14;
   color: #1f3158;
 }
@@ -452,15 +453,15 @@ body {
 .home-user-line {
   margin: 14px 0 0;
   color: #3e8ec8;
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 700;
 }
 
 .home-hero-desc {
   margin: 14px 0 0;
   color: #4e607f;
-  font-size: 21px;
-  line-height: 1.75;
+  font-size: 16px;
+  line-height: 1.72;
   max-width: 980px;
 }
 
@@ -472,14 +473,14 @@ body {
 
 .home-hero-meta strong {
   display: block;
-  font-size: 40px;
+  font-size: 30px;
   color: #182a51;
 }
 
 .home-hero-meta span {
   display: block;
   color: #6f7f9d;
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .home-hero-right {
@@ -505,14 +506,14 @@ body {
 
 .home-section-head h2 {
   margin: 0;
-  font-size: clamp(38px, 3.4vw, 52px);
+  font-size: clamp(28px, 2.4vw, 36px);
   color: #182a51;
 }
 
 .home-section-head p {
   margin: 8px 0 0;
   color: #7182a0;
-  font-size: 24px;
+  font-size: 16px;
 }
 
 .home-feature-grid {
@@ -527,19 +528,40 @@ body {
   border-radius: 14px;
   background: #fff;
   padding: 16px;
+  box-shadow: 0 6px 18px rgba(63, 98, 170, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.home-feature-card:hover,
+.home-adv-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(63, 98, 170, 0.16);
+}
+
+.home-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, #4ea5ff 0%, #4c6fff 100%);
+  box-shadow: 0 8px 18px rgba(80, 116, 213, 0.3);
 }
 
 .home-feature-card h3 {
   margin: 0;
   color: #253b66;
-  font-size: 24px;
+  font-size: 18px;
 }
 
 .home-feature-card p {
   margin: 10px 0 0;
   color: #5a6f94;
   line-height: 1.72;
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .home-adv-grid {
@@ -554,19 +576,21 @@ body {
   border-radius: 14px;
   background: #fff;
   padding: 14px;
+  box-shadow: 0 6px 18px rgba(63, 98, 170, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .home-adv-card h4 {
   margin: 0;
   color: #263d68;
-  font-size: 22px;
+  font-size: 18px;
 }
 
 .home-adv-card p {
   margin: 8px 0 0;
   color: #5b7195;
   line-height: 1.65;
-  font-size: 17px;
+  font-size: 14px;
 }
 
 #qaModule .welcome-card {
@@ -797,24 +821,6 @@ body {
   padding: 10px;
 }
 
-.kg-conn {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.kg-conn input {
-  border: 1px solid #cfdbf3;
-  border-radius: 10px;
-  padding: 10px;
-}
-
-.kg-conn button {
-  width: 100%;
-  min-width: 0;
-}
-
 .kg-status {
   margin-bottom: 10px;
   font-size: 13px;
@@ -844,6 +850,18 @@ body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.kg-workspace {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#kgModule.kg-search-mode .kg-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(220px, 1fr);
+  gap: 10px;
 }
 
 .graph-hover-action {
@@ -898,6 +916,12 @@ body {
   max-height: 240px;
   overflow: auto;
   flex: 0 0 auto;
+}
+
+#kgModule.kg-search-mode .triplet-list {
+  margin-top: 0;
+  height: 520px;
+  max-height: 520px;
 }
 
 .triplet-item {
@@ -1676,6 +1700,22 @@ textarea:focus {
   justify-content: center;
 }
 
+.rect-primary-btn {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  min-width: 132px;
+  height: 44px;
+  padding: 0 16px;
+  background: linear-gradient(180deg, #5d82ff 0%, #446df2 100%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 @media (max-height: 760px) {
   .app-shell {
     margin: 8px auto;
@@ -1782,10 +1822,6 @@ textarea:focus {
     flex-wrap: wrap;
   }
 
-  .kg-conn {
-    grid-template-columns: 1fr;
-  }
-
   .topbar-right {
     width: 100%;
     flex-wrap: wrap;
@@ -1798,6 +1834,10 @@ textarea:focus {
 
   .graph-canvas {
     height: 360px;
+  }
+
+  #kgModule.kg-search-mode .kg-workspace {
+    grid-template-columns: 1fr;
   }
 
   .admin-manage-layout {

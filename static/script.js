@@ -30,6 +30,7 @@ const neo4jConnectBtn = document.getElementById("neo4jConnectBtn");
 const kgKeyword = document.getElementById("kgKeyword");
 const kgSearchBtn = document.getElementById("kgSearchBtn");
 const kgReloadBtn = document.getElementById("kgReloadBtn");
+const kgModuleEl = document.getElementById("kgModule");
 const graphZoomInBtn = document.getElementById("graphZoomInBtn");
 const graphZoomOutBtn = document.getElementById("graphZoomOutBtn");
 const graphCanvas = document.getElementById("graphCanvas");
@@ -1230,9 +1231,11 @@ function renderStatus() {
 
   runtimeStatus.className = `status-chip ${ok ? "ok" : "error"}`;
   runtimeStatus.textContent = ok ? "neo4j已连接" : "neo4j未连接";
-  if (kgConnPanel) {
-    kgConnPanel.style.display = ok ? "none" : "grid";
-  }
+}
+
+function setKgSearchMode(enabled) {
+  if (!kgModuleEl) return;
+  kgModuleEl.classList.toggle("kg-search-mode", Boolean(enabled));
 }
 
 function initLayoutResizer() {
@@ -1909,6 +1912,7 @@ function initVoice() {
 
 async function loadGraph() {
   try {
+    setKgSearchMode(false);
     const res = await fetch("/api/kg/graph?limit=150");
     if (res.status === 401) {
       window.location.href = "/login";
@@ -2012,6 +2016,7 @@ async function loadGraph() {
 async function searchTriplets() {
   const kw = (kgKeyword.value || "").trim();
   if (!kw) {
+    setKgSearchMode(false);
     tripletList.textContent = "请输入关键词后检索。";
     if (pinnedNodeId === null || pinnedNodeId === undefined) {
       resetGraphFocus();
@@ -2026,6 +2031,7 @@ async function searchTriplets() {
     }
     const data = await res.json();
     const rows = data.triplets || [];
+    setKgSearchMode(true);
     if (rows.length === 0) {
       tripletList.textContent = `未检索到相关三元组。${data.error ? ` 错误：${data.error}` : ""}`;
       if (pinnedNodeId === null || pinnedNodeId === undefined) {
@@ -2042,6 +2048,7 @@ async function searchTriplets() {
     hideHoverAction();
     applyTripletSearchHighlight(rows, kw);
   } catch (e) {
+    setKgSearchMode(true);
     tripletList.textContent = "检索失败，请检查 Neo4j 连接。";
   }
 }

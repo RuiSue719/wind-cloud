@@ -49,10 +49,10 @@ OLLAMA_NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", str(max(2, (os.cpu_count(
 OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "0" if OLLAMA_FORCE_CPU else "1"))
 '''
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://d2ad0ef8.databases.neo4j.io")
+NEO4J_USER = os.getenv("NEO4J_USER", "d2ad0ef8")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "xbTpmrOemDMi4JvGvdnVz55oznmMppoC6tRcQ5yZGw")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "d2ad0ef8")
 
 # 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
@@ -61,6 +61,8 @@ SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 LOGIN_DEFAULT_USER = "admin"
 LOGIN_DEFAULT_PASSWORD = "123456"
 LOGIN_DEFAULT_ROLE = "admin"
+LOGIN_DEFAULT_COMMON_USER = "11"
+LOGIN_DEFAULT_COMMON_PASSWORD = "123"
 
 USER_ROLE_USER = "user"
 USER_ROLE_ADMIN = "admin"
@@ -525,6 +527,15 @@ class Neo4jService:
             result = session.run(query, params)
             return [record.data() for record in result]
 
+    def count_nodes(self) -> int:
+        rows = self.run_read("MATCH (n) RETURN count(n) AS cnt")
+        if not rows:
+            return 0
+        try:
+            return int(rows[0].get("cnt", 0) or 0)
+        except Exception:
+            return 0
+
     def get_graph(self, limit: int = 120) -> Dict[str, Any]:
         rows = self.run_read(
             """
@@ -814,14 +825,22 @@ def init_user_db() -> None:
 
 def seed_default_admin() -> None:
     existing = get_user_by_username(LOGIN_DEFAULT_USER)
-    if existing:
-        return
-    create_user(
-        username=LOGIN_DEFAULT_USER,
-        password=LOGIN_DEFAULT_PASSWORD,
-        role=LOGIN_DEFAULT_ROLE,
-        phone="",
-    )
+    if not existing:
+        create_user(
+            username=LOGIN_DEFAULT_USER,
+            password=LOGIN_DEFAULT_PASSWORD,
+            role=LOGIN_DEFAULT_ROLE,
+            phone="",
+        )
+
+    default_common = get_user_by_username(LOGIN_DEFAULT_COMMON_USER)
+    if not default_common:
+        create_user(
+            username=LOGIN_DEFAULT_COMMON_USER,
+            password=LOGIN_DEFAULT_COMMON_PASSWORD,
+            role=USER_ROLE_USER,
+            phone="",
+        )
 
 
 def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
@@ -1045,8 +1064,7 @@ def build_admin_console_stats() -> Dict[str, Any]:
 
     node_total = 0
     try:
-        graph = neo4j_service.get_graph(limit=2000)
-        node_total = len(graph.get("nodes") or [])
+        node_total = neo4j_service.count_nodes()
     except Exception:
         node_total = 0
 

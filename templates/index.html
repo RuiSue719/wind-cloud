@@ -142,25 +142,40 @@
       </section>
       <section class="console-summary-grid">
         <article class="console-summary-card">
-          <div class="console-summary-value" id="consoleUserTotal">-</div>
-          <div class="console-summary-label">当前用户总数</div>
+          <div class="console-card-head">
+            <span class="console-card-icon icon-users">👤</span>
+            <div>
+              <div class="console-summary-value" id="consoleUserTotal">-</div>
+              <div class="console-summary-label">当前用户总数</div>
+            </div>
+          </div>
         </article>
         <article class="console-summary-card">
-          <div class="console-summary-value" id="consoleNodeTotal">-</div>
-          <div class="console-summary-label">图谱节点</div>
+          <div class="console-card-head">
+            <span class="console-card-icon icon-nodes">🧩</span>
+            <div>
+              <div class="console-summary-value" id="consoleNodeTotal">-</div>
+              <div class="console-summary-label">图谱节点</div>
+            </div>
+          </div>
         </article>
         <article class="console-summary-card">
-          <div class="console-summary-value" id="consoleCaseTotal">-</div>
-          <div class="console-summary-label">案例总数</div>
+          <div class="console-card-head">
+            <span class="console-card-icon icon-cases">📚</span>
+            <div>
+              <div class="console-summary-value" id="consoleCaseTotal">-</div>
+              <div class="console-summary-label">案例总数</div>
+            </div>
+          </div>
         </article>
       </section>
       <section class="console-chart-grid">
         <article class="console-chart-card">
-          <h3>部件相关故障 Top10</h3>
+          <h3><span class="console-title-icon">📊</span>部件相关故障 Top10</h3>
           <div id="consoleTop10List" class="console-top-list"></div>
         </article>
         <article class="console-chart-card">
-          <h3>故障发生频率分布</h3>
+          <h3><span class="console-title-icon">🎯</span>故障发生频率分布</h3>
           <div class="console-donut-wrap">
             <div id="consoleFreqDonut" class="console-donut"></div>
             <div id="consoleFreqLegend" class="console-legend"></div>

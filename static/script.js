@@ -152,12 +152,16 @@ let DIAG_MODEL_TIPS = {
   "cnn-transformer": "以 CNN 做局部特征提取、Transformer 建模全局时序依赖，擅长捕捉长距离故障相关特征，在复杂变工况、多故障耦合轴承数据上表现更稳定。",
 };
 
-const CHAT_STORAGE_KEY = "industrial_qa_history_v1";
 const CHAT_REQUEST_TIMEOUT_MS = 180000;
 const GRAPH_AUTO_REQUEST_TIMEOUT_MS = 240000;
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 180000;
 const CITATION_REQUEST_TIMEOUT_MS = 220000;
 const isAdminUser = (document.body?.dataset?.isAdmin || "0") === "1";
+
+function getChatStorageKey() {
+  const username = (document.body?.dataset?.username || "guest").trim() || "guest";
+  return `industrial_qa_history_v1_${username}`;
+}
 
 function setCitation(citation) {
   pendingCitation = citation;
@@ -814,9 +818,24 @@ function renderCasePagination() {
   const pages = caseState.pages;
   casePagination.innerHTML = `
     <span>第 ${page} / ${pages} 页</span>
+    <select id="casePageSizeSelect" class="case-page-select">
+      <option value="10" ${caseState.pageSize === 10 ? "selected" : ""}>10条/页</option>
+      <option value="20" ${caseState.pageSize === 20 ? "selected" : ""}>20条/页</option>
+      <option value="50" ${caseState.pageSize === 50 ? "selected" : ""}>50条/页</option>
+      <option value="100" ${caseState.pageSize === 100 ? "selected" : ""}>100条/页</option>
+    </select>
     <button class="case-page-btn" id="casePrevPageBtn" ${page <= 1 ? "disabled" : ""}>上一页</button>
     <button class="case-page-btn" id="caseNextPageBtn" ${page >= pages ? "disabled" : ""}>下一页</button>
+    <span>跳至</span>
+    <input id="casePageJumpInput" class="case-page-input" type="number" min="1" max="${pages}" value="${page}" />
+    <button class="case-page-btn" id="casePageJumpBtn">确定</button>
   `;
+  document.getElementById("casePageSizeSelect")?.addEventListener("change", async (e) => {
+    const size = Number(e?.target?.value || 10);
+    caseState.pageSize = [10, 20, 50, 100].includes(size) ? size : 10;
+    caseState.page = 1;
+    await loadAdminCaseModule();
+  });
   document.getElementById("casePrevPageBtn")?.addEventListener("click", async () => {
     if (caseState.page <= 1) return;
     caseState.page -= 1;
@@ -825,6 +844,13 @@ function renderCasePagination() {
   document.getElementById("caseNextPageBtn")?.addEventListener("click", async () => {
     if (caseState.page >= caseState.pages) return;
     caseState.page += 1;
+    await loadAdminCaseModule();
+  });
+  document.getElementById("casePageJumpBtn")?.addEventListener("click", async () => {
+    const input = document.getElementById("casePageJumpInput");
+    const target = Number(input?.value || page);
+    if (!Number.isFinite(target)) return;
+    caseState.page = Math.max(1, Math.min(caseState.pages, Math.round(target)));
     await loadAdminCaseModule();
   });
 }
@@ -1128,12 +1154,12 @@ function nowText(ts) {
 }
 
 function saveSessions() {
-  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sessions));
+  localStorage.setItem(getChatStorageKey(), JSON.stringify(sessions));
 }
 
 function loadSessions() {
   try {
-    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    const raw = localStorage.getItem(getChatStorageKey());
     sessions = raw ? JSON.parse(raw) : [];
   } catch (e) {
     sessions = [];

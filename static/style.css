@@ -269,6 +269,13 @@ body {
 
 #kgModule {
   overflow: auto;
+  padding-bottom: 78px;
+}
+
+#caseModule {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 96px;
 }
 
 #diagModule {
@@ -1009,6 +1016,12 @@ body {
   padding: 12px;
 }
 
+.admin-case-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .admin-file-list-card h3 {
   margin: 0 0 8px;
   font-size: 15px;
@@ -1205,6 +1218,13 @@ body {
   margin-top: 10px;
   color: #5d7399;
   font-size: 13px;
+  padding-top: 8px;
+  padding-bottom: 10px;
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  z-index: 3;
+  border-top: 1px solid #e7efff;
 }
 
 .case-page-btn {

@@ -53,6 +53,10 @@ NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://d2ad0ef8.databases.neo4j.io")
 NEO4J_USER = os.getenv("NEO4J_USER", "d2ad0ef8")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "xbTpmrOemDMi4JvGvdnVz55oznmMppoC6tRcQ5yZGw")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "d2ad0ef8")
+NEO4J_URI_FALLBACK = "neo4j+s://d2ad0ef8.databases.neo4j.io"
+NEO4J_USER_FALLBACK = "d2ad0ef8"
+NEO4J_PASSWORD_FALLBACK = "xbTpmrOemDMi4JvGvdnVz55oznmMppoC6tRcQ5yZGw"
+NEO4J_DATABASE_FALLBACK = "d2ad0ef8"
 
 # 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
@@ -512,7 +516,28 @@ class Neo4jService:
             return self._driver
         except Exception as exc:
             self._driver = None
-            self.last_error = str(exc)
+            err_text = str(exc)
+            self.last_error = err_text
+            unauthorized = "unauthorized" in err_text.lower() or "authentication failure" in err_text.lower()
+            should_try_fallback = unauthorized and (
+                self.uri != NEO4J_URI_FALLBACK
+                or self.user != NEO4J_USER_FALLBACK
+                or self.password != NEO4J_PASSWORD_FALLBACK
+                or self.database != NEO4J_DATABASE_FALLBACK
+            )
+            if should_try_fallback:
+                try:
+                    self.uri = NEO4J_URI_FALLBACK
+                    self.user = NEO4J_USER_FALLBACK
+                    self.password = NEO4J_PASSWORD_FALLBACK
+                    self.database = NEO4J_DATABASE_FALLBACK
+                    self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+                    self._driver.verify_connectivity()
+                    self.last_error = ""
+                    return self._driver
+                except Exception as fallback_exc:
+                    self._driver = None
+                    self.last_error = str(fallback_exc)
             return None
 
     def available(self) -> bool:

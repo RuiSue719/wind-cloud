@@ -51,6 +51,7 @@ const kgSearchBtnManage = document.getElementById("kgSearchBtnManage");
 const kgResetBtnManage = document.getElementById("kgResetBtnManage");
 const kgManageMeta = document.getElementById("kgManageMeta");
 const kgManageListWrap = document.getElementById("kgManageListWrap");
+const kgManageDetailBlock = document.getElementById("kgManageDetailBlock");
 const kgManageDetailTitle = document.getElementById("kgManageDetailTitle");
 const kgManagePagination = document.getElementById("kgManagePagination");
 const kgManageTableWrap = document.getElementById("kgManageTableWrap");
@@ -984,9 +985,10 @@ async function submitCaseModal() {
 }
 
 async function loadAdminKbFileDetail(filename) {
-  if (!kgManageTableWrap || !kgManageDetailTitle || !filename) {
+  if (!kgManageTableWrap || !kgManageDetailTitle || !kgManageDetailBlock || !filename) {
     return;
   }
+  kgManageDetailBlock.classList.remove("hidden");
   kgManageDetailTitle.textContent = `正在读取 ${filename} ...`;
   kgManageTableWrap.innerHTML = "<div class='admin-empty'>正在读取CSV内容...</div>";
   try {
@@ -1066,9 +1068,12 @@ function renderKbManagePagination() {
 }
 
 async function loadAdminKbFiles() {
-  if (!kgManageListWrap || !kgManageTableWrap || !kgManageDetailTitle) {
+  if (!kgManageListWrap || !kgManageTableWrap || !kgManageDetailTitle || !kgManageDetailBlock) {
     return;
   }
+  kgManageDetailBlock.classList.add("hidden");
+  kgManageTableWrap.innerHTML = "";
+  kgManageDetailTitle.textContent = "CSV 内容预览";
   kgManageListWrap.innerHTML = "<div class='admin-empty'>正在加载知识库CSV列表...</div>";
   try {
     const params = new URLSearchParams({
@@ -1100,9 +1105,6 @@ async function loadAdminKbFiles() {
     const rows = Array.isArray(data.rows) ? data.rows : [];
     renderKbManageTable(rows);
     renderKbManagePagination();
-    if (!kbManageState.selectedFile && rows.length) {
-      await loadAdminKbFileDetail(rows[0].file || "");
-    }
   } catch (e) {
     kgManageListWrap.innerHTML = "<div class='admin-empty'>知识库文件列表加载失败。</div>";
   }

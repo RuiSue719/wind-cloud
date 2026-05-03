@@ -515,21 +515,19 @@ class Neo4jService:
             self._driver = None
 
     def _driver_or_none(self):
-        """只尝试连接一次，绝不重试！"""
+        """仅在需要时尝试连接一次，不重试、不触发限流"""
         with self._lock:
             if self._driver is not None:
                 return self._driver
             try:
-                # ✅ Aura云端必须的SSL配置，少一个都连不上！
+                # ✅ 关键修复：删除 encrypted/trust 参数，仅保留 URI 为 neo4j+s://
                 self._driver = GraphDatabase.driver(
                     self.uri,
                     auth=(self.user, self.password),
-                    encrypted=True,               # 强制加密，对应neo4j+s://协议
-                    trust="TRUST_ALL_CERTIFICATES",  # 信任Aura的SSL证书，避免拦截
-                    connection_timeout=20,         # 20秒超时，避免无限等待
+                    connection_timeout=20,         # 仅保留超时配置，避免无限等待
                     max_connection_lifetime=3600  # 连接生命周期，防止Aura主动断开
                 )
-                # 验证连接
+                # 验证连接（必须指定 database）
                 self._driver.verify_connectivity(database=self.database)
                 self.last_error = ""
                 print(f"[Neo4j] ✅ 连接成功！数据库：{self.database}")
@@ -541,7 +539,7 @@ class Neo4jService:
                 return None
 
     def available(self) -> bool:
-        # 只尝试一次连接，绝不重试！
+        # 仅尝试一次连接，绝不重试
         return self._driver_or_none() is not None
 
     def run_read(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -555,11 +553,10 @@ class Neo4jService:
                 return [record.data() for record in result]
         except Exception as exc:
             self.last_error = str(exc)
-            # 连接失败时，只重置一次驱动，不再重试
+            # 连接失败时仅重置一次，不重试
             self._close_driver()
             return []
 
-    # 下面的 count_nodes、get_graph 等方法保持不变，不用修改
     def count_nodes(self) -> int:
         rows = self.run_read("MATCH (n) RETURN count(n) AS cnt")
         if not rows:
@@ -578,7 +575,7 @@ class Neo4jService:
                    labels(n) AS source_labels,
                    type(r) AS rel_type,
                    elementId(m) AS target_id,
-                   coalesce(m.name, m.title, labels(males(n)[0] + '_' + elementId(m))) AS target_name,
+                   coalesce(m.name, m.title, labels(m)[0] + '_' + elementId(m)) AS target_name,
                    labels(m) AS target_labels
             LIMIT $limit
             """,
@@ -655,7 +652,6 @@ class Neo4jService:
         if not rows:
             return ""
         return str(rows[0].get("label") or "").strip()
-
 
 class CloudLLMService:
     def __init__(self, api_key: str, default_model: str) -> None:

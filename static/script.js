@@ -45,8 +45,51 @@ const kgConnPanel = document.getElementById("kgConnPanel");
 const kgManageFileList = document.getElementById("kgManageFileList");
 const kgManageDetailTitle = document.getElementById("kgManageDetailTitle");
 const kgManageTableWrap = document.getElementById("kgManageTableWrap");
+const consoleUserTotal = document.getElementById("consoleUserTotal");
+const consoleNodeTotal = document.getElementById("consoleNodeTotal");
+const consoleCaseTotal = document.getElementById("consoleCaseTotal");
+const consoleTop10List = document.getElementById("consoleTop10List");
+const consoleFreqDonut = document.getElementById("consoleFreqDonut");
+const consoleFreqLegend = document.getElementById("consoleFreqLegend");
 const caseModuleMeta = document.getElementById("caseModuleMeta");
 const caseModuleTableWrap = document.getElementById("caseModuleTableWrap");
+const casePagination = document.getElementById("casePagination");
+const caseAddBtn = document.getElementById("caseAddBtn");
+const caseSearchInput = document.getElementById("caseSearchInput");
+const caseSearchBtn = document.getElementById("caseSearchBtn");
+const caseResetBtn = document.getElementById("caseResetBtn");
+const caseSourceFilter = document.getElementById("caseSourceFilter");
+const caseEditModal = document.getElementById("caseEditModal");
+const caseModalTitle = document.getElementById("caseModalTitle");
+const caseModalCloseBtn = document.getElementById("caseModalCloseBtn");
+const caseManualTabBtn = document.getElementById("caseManualTabBtn");
+const caseImportTabBtn = document.getElementById("caseImportTabBtn");
+const caseManualPane = document.getElementById("caseManualPane");
+const caseImportPane = document.getElementById("caseImportPane");
+const caseFaultInput = document.getElementById("caseFaultInput");
+const caseRelationInput = document.getElementById("caseRelationInput");
+const caseConsequenceInput = document.getElementById("caseConsequenceInput");
+const caseSourceInput = document.getElementById("caseSourceInput");
+const caseImportFileInput = document.getElementById("caseImportFileInput");
+const caseImportModeSelect = document.getElementById("caseImportModeSelect");
+const caseImportStartInput = document.getElementById("caseImportStartInput");
+const caseImportEndInput = document.getElementById("caseImportEndInput");
+const caseModalSaveBtn = document.getElementById("caseModalSaveBtn");
+const caseModalMessage = document.getElementById("caseModalMessage");
+const profileAvatarPreview = document.getElementById("profileAvatarPreview");
+const profileAvatarInput = document.getElementById("profileAvatarInput");
+const profileUsernameInput = document.getElementById("profileUsernameInput");
+const profilePhoneInput = document.getElementById("profilePhoneInput");
+const profileEmailInput = document.getElementById("profileEmailInput");
+const profileRoleInput = document.getElementById("profileRoleInput");
+const profileStatusInput = document.getElementById("profileStatusInput");
+const profileSaveBtn = document.getElementById("profileSaveBtn");
+const profileMessage = document.getElementById("profileMessage");
+const profileOldPwdInput = document.getElementById("profileOldPwdInput");
+const profileNewPwdInput = document.getElementById("profileNewPwdInput");
+const profileConfirmPwdInput = document.getElementById("profileConfirmPwdInput");
+const profilePwdBtn = document.getElementById("profilePwdBtn");
+const profilePwdMessage = document.getElementById("profilePwdMessage");
 const diagDatasetCards = document.getElementById("diagDatasetCards");
 const diagModelButtons = document.getElementById("diagModelButtons");
 const diagModelTip = document.getElementById("diagModelTip");
@@ -90,6 +133,17 @@ const diagState = {
   lastFft: [],
   lastResultLabel: "",
 };
+const caseState = {
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  pages: 1,
+  keyword: "",
+  source: "",
+  editId: null,
+  modalMode: "manual",
+  sourceOptions: [],
+};
 let DIAG_MODEL_TIPS = {
   cnn: "专为一维时序振动信号设计，通过浅层卷积快速提取局部时域特征，适合数据量中等、追求轻量化快速推理的轴承故障诊断。",
   wdcnn: "基于小波变换与深度 1D-CNN 结合的网络，能在强噪声下自适应提取轴承故障的时频特征，对 CWRU、JNU 等含噪实测数据鲁棒性更强。",
@@ -102,6 +156,7 @@ const CHAT_REQUEST_TIMEOUT_MS = 180000;
 const GRAPH_AUTO_REQUEST_TIMEOUT_MS = 240000;
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 180000;
 const CITATION_REQUEST_TIMEOUT_MS = 220000;
+const isAdminUser = (document.body?.dataset?.isAdmin || "0") === "1";
 
 function setCitation(citation) {
   pendingCitation = citation;
@@ -155,12 +210,22 @@ function switchModule(targetId) {
 
   if (targetId === "kgModule") {
     loadGraph();
+  } else if (targetId === "consoleModule") {
+    loadAdminConsole();
   } else if (targetId === "diagModule") {
     initDiagnosisModule();
+  } else if (targetId === "homeModule") {
+    const dateEl = document.getElementById("homeTodayDate");
+    if (dateEl) {
+      const now = new Date();
+      dateEl.textContent = `${now.getMonth() + 1}/${now.getDate()}`;
+    }
   } else if (targetId === "kgManageModule") {
     loadAdminCsvFiles();
   } else if (targetId === "caseModule") {
     loadAdminCaseModule();
+  } else if (targetId === "profileModule") {
+    loadUserProfile();
   }
 }
 
@@ -565,13 +630,93 @@ function renderAdminTable(container, columns, rows) {
   container.innerHTML = `<div class="admin-table-scroll"><table class="admin-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
 }
 
+async function loadAdminConsole() {
+  if (!consoleTop10List || !consoleFreqDonut || !consoleFreqLegend) return;
+  consoleTop10List.innerHTML = "<div class='admin-empty'>正在加载统计...</div>";
+  try {
+    const res = await fetch("/api/admin/console");
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "加载失败");
+    }
+    const summary = data.summary || {};
+    if (consoleUserTotal) consoleUserTotal.textContent = String(summary.users ?? 0);
+    if (consoleNodeTotal) consoleNodeTotal.textContent = String(summary.nodes ?? 0);
+    if (consoleCaseTotal) consoleCaseTotal.textContent = String(summary.cases ?? 0);
+
+    const top10 = Array.isArray(data.componentFaultTop10) ? data.componentFaultTop10 : [];
+    if (top10.length === 0) {
+      consoleTop10List.innerHTML = "<div class='admin-empty'>未获取到部件相关故障数据。</div>";
+    } else {
+      const maxCount = Math.max(...top10.map((item) => Number(item.count || 0)), 1);
+      consoleTop10List.innerHTML = top10
+        .map((item) => {
+          const cnt = Number(item.count || 0);
+          const width = Math.max(8, Math.round((cnt / maxCount) * 100));
+          return `
+            <div class="console-top-item">
+              <div class="console-top-name">${escapeHtml(item.name || "-")}</div>
+              <div class="console-top-bar-wrap">
+                <div class="console-top-bar" style="width:${width}%"></div>
+              </div>
+              <div class="console-top-count">${cnt}</div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    const freq = Array.isArray(data.frequencyDistribution) ? data.frequencyDistribution : [];
+    const total = freq.reduce((acc, item) => acc + Number(item.count || 0), 0);
+    const fallbackColors = ["#ff8c8c", "#ffe27a", "#92e28f"];
+    const segments = [];
+    let acc = 0;
+    freq.forEach((item, idx) => {
+      const count = Number(item.count || 0);
+      if (count <= 0 || total <= 0) return;
+      const start = (acc / total) * 360;
+      acc += count;
+      const end = (acc / total) * 360;
+      const color = item.color || fallbackColors[idx % fallbackColors.length];
+      segments.push(`${color} ${start}deg ${end}deg`);
+    });
+    consoleFreqDonut.style.background =
+      segments.length > 0 ? `conic-gradient(${segments.join(",")})` : "conic-gradient(#e7eefb 0deg 360deg)";
+    consoleFreqLegend.innerHTML = freq
+      .map((item, idx) => {
+        const count = Number(item.count || 0);
+        const color = item.color || fallbackColors[idx % fallbackColors.length];
+        return `
+          <div class="console-legend-item">
+            <span class="console-dot" style="background:${color}"></span>
+            <span>${escapeHtml(item.label || "-")}：${count}件</span>
+          </div>
+        `;
+      })
+      .join("");
+  } catch (e) {
+    consoleTop10List.innerHTML = `<div class='admin-empty'>${escapeHtml(e.message || "控制台加载失败。")}</div>`;
+    if (consoleFreqLegend) consoleFreqLegend.innerHTML = "";
+  }
+}
+
 async function loadAdminCaseModule() {
-  if (!caseModuleTableWrap) {
+  if (!caseModuleTableWrap || !casePagination) {
     return;
   }
   caseModuleTableWrap.innerHTML = "<div class='admin-empty'>正在加载案例数据...</div>";
   try {
-    const res = await fetch("/api/admin/case-module");
+    const params = new URLSearchParams({
+      page: String(caseState.page),
+      pageSize: String(caseState.pageSize),
+      keyword: caseState.keyword || "",
+      source: caseState.source || "",
+    });
+    const res = await fetch(`/api/admin/case-records?${params.toString()}`);
     if (res.status === 401) {
       window.location.href = "/login";
       return;
@@ -581,12 +726,192 @@ async function loadAdminCaseModule() {
       caseModuleTableWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "加载失败")}</div>`;
       return;
     }
+    const pg = data.pagination || {};
+    caseState.page = Number(pg.page || 1);
+    caseState.pageSize = Number(pg.pageSize || 10);
+    caseState.total = Number(pg.total || 0);
+    caseState.pages = Math.max(1, Number(pg.pages || 1));
+    caseState.sourceOptions = Array.isArray(data.sourceOptions) ? data.sourceOptions : [];
+    renderCaseSourceFilter();
     if (caseModuleMeta) {
-      caseModuleMeta.textContent = `来源：${data.source || "-"} | 行范围：${data.lineRange || "-"} | 条数：${(data.rows || []).length}`;
+      caseModuleMeta.textContent = `共 ${caseState.total} 条记录，每页 ${caseState.pageSize} 条`;
     }
-    renderAdminTable(caseModuleTableWrap, data.columns || [], data.rows || []);
+    renderCaseTable(data.rows || []);
+    renderCasePagination();
   } catch (e) {
     caseModuleTableWrap.innerHTML = "<div class='admin-empty'>案例数据加载失败。</div>";
+  }
+}
+
+function renderCaseSourceFilter() {
+  if (!caseSourceFilter) return;
+  const options = [`<option value="">全部来源</option>`]
+    .concat(caseState.sourceOptions.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`))
+    .join("");
+  caseSourceFilter.innerHTML = options;
+  caseSourceFilter.value = caseState.source || "";
+}
+
+function renderCaseTable(rows) {
+  if (!caseModuleTableWrap) return;
+  const columns = ["故障位置", "关联", "后果", "案例来源"];
+  const thead = `<tr>${columns.map((c) => `<th>${c}</th>`).join("")}<th>操作</th></tr>`;
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const tbody = safeRows.length
+    ? safeRows
+        .map(
+          (row) => `
+          <tr>
+            <td>${escapeHtml(row["故障位置"] || "")}</td>
+            <td>${escapeHtml(row["关联"] || "")}</td>
+            <td>${escapeHtml(row["后果"] || "")}</td>
+            <td>${escapeHtml(row["案例来源"] || "")}</td>
+            <td>
+              <button class="case-op-btn" data-op="edit" data-id="${Number(row.id || 0)}">编辑</button>
+              <button class="case-op-btn danger" data-op="delete" data-id="${Number(row.id || 0)}">删除</button>
+            </td>
+          </tr>`,
+        )
+        .join("")
+    : `<tr><td colspan="5">暂无数据</td></tr>`;
+  caseModuleTableWrap.innerHTML = `<div class="admin-table-scroll"><table class="admin-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+  caseModuleTableWrap.querySelectorAll(".case-op-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const op = btn.getAttribute("data-op");
+      const recordId = Number(btn.getAttribute("data-id") || 0);
+      if (!recordId) return;
+      if (op === "edit") {
+        const tr = btn.closest("tr");
+        openCaseModal("manual", "edit", {
+          id: recordId,
+          "故障位置": tr?.children?.[0]?.textContent || "",
+          关联: tr?.children?.[1]?.textContent || "",
+          后果: tr?.children?.[2]?.textContent || "",
+          案例来源: tr?.children?.[3]?.textContent || "",
+        });
+        return;
+      }
+      if (op === "delete") {
+        const ok = window.confirm("确定删除该条诊断案例记录吗？");
+        if (!ok) return;
+        try {
+          const res = await fetch(`/api/admin/case-records/${recordId}`, { method: "DELETE" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "删除失败");
+          await loadAdminCaseModule();
+        } catch (e) {
+          window.alert(e.message || "删除失败");
+        }
+      }
+    });
+  });
+}
+
+function renderCasePagination() {
+  if (!casePagination) return;
+  const page = caseState.page;
+  const pages = caseState.pages;
+  casePagination.innerHTML = `
+    <span>第 ${page} / ${pages} 页</span>
+    <button class="case-page-btn" id="casePrevPageBtn" ${page <= 1 ? "disabled" : ""}>上一页</button>
+    <button class="case-page-btn" id="caseNextPageBtn" ${page >= pages ? "disabled" : ""}>下一页</button>
+  `;
+  document.getElementById("casePrevPageBtn")?.addEventListener("click", async () => {
+    if (caseState.page <= 1) return;
+    caseState.page -= 1;
+    await loadAdminCaseModule();
+  });
+  document.getElementById("caseNextPageBtn")?.addEventListener("click", async () => {
+    if (caseState.page >= caseState.pages) return;
+    caseState.page += 1;
+    await loadAdminCaseModule();
+  });
+}
+
+function resetCaseModalMessage(text = "") {
+  if (caseModalMessage) {
+    caseModalMessage.textContent = text;
+  }
+}
+
+function setCaseModalTab(mode) {
+  caseState.modalMode = mode;
+  caseManualTabBtn?.classList.toggle("active", mode === "manual");
+  caseImportTabBtn?.classList.toggle("active", mode === "import");
+  caseManualPane?.classList.toggle("hidden", mode !== "manual");
+  caseImportPane?.classList.toggle("hidden", mode !== "import");
+}
+
+function openCaseModal(mode = "manual", action = "create", row = null) {
+  if (!caseEditModal) return;
+  caseState.editId = action === "edit" && row ? Number(row.id || 0) : null;
+  caseModalTitle.textContent = action === "edit" ? "编辑记录" : "添加记录";
+  caseFaultInput.value = row ? row["故障位置"] || "" : "";
+  caseRelationInput.value = row ? row["关联"] || "" : "";
+  caseConsequenceInput.value = row ? row["后果"] || "" : "";
+  caseSourceInput.value = row ? row["案例来源"] || "" : "";
+  if (caseImportFileInput) caseImportFileInput.value = "";
+  if (caseImportModeSelect) caseImportModeSelect.value = "all";
+  if (caseImportStartInput) caseImportStartInput.value = "1";
+  if (caseImportEndInput) caseImportEndInput.value = "1";
+  setCaseModalTab(mode);
+  resetCaseModalMessage("");
+  caseEditModal.classList.remove("hidden");
+}
+
+function closeCaseModal() {
+  caseEditModal?.classList.add("hidden");
+  caseState.editId = null;
+}
+
+async function submitCaseModal() {
+  resetCaseModalMessage("");
+  if (caseState.modalMode === "import") {
+    if (!caseImportFileInput?.files?.[0]) {
+      resetCaseModalMessage("请先选择CSV文件。");
+      return;
+    }
+    const form = new FormData();
+    form.append("file", caseImportFileInput.files[0]);
+    form.append("importMode", caseImportModeSelect?.value || "all");
+    form.append("startRow", caseImportStartInput?.value || "1");
+    form.append("endRow", caseImportEndInput?.value || "1");
+    try {
+      const res = await fetch("/api/admin/case-records/import", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "导入失败");
+      closeCaseModal();
+      caseState.page = 1;
+      await loadAdminCaseModule();
+      return;
+    } catch (e) {
+      resetCaseModalMessage(e.message || "导入失败");
+      return;
+    }
+  }
+
+  const payload = {
+    故障位置: (caseFaultInput?.value || "").trim(),
+    关联: (caseRelationInput?.value || "").trim(),
+    后果: (caseConsequenceInput?.value || "").trim(),
+    案例来源: (caseSourceInput?.value || "").trim(),
+  };
+  try {
+    const isEdit = Boolean(caseState.editId);
+    const endpoint = isEdit ? `/api/admin/case-records/${caseState.editId}` : "/api/admin/case-records";
+    const method = isEdit ? "PUT" : "POST";
+    const res = await fetch(endpoint, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "保存失败");
+    closeCaseModal();
+    caseState.page = 1;
+    await loadAdminCaseModule();
+  } catch (e) {
+    resetCaseModalMessage(e.message || "保存失败");
   }
 }
 
@@ -655,6 +980,103 @@ async function loadAdminCsvFiles() {
     }
   } catch (e) {
     kgManageFileList.innerHTML = "<div class='admin-empty'>CSV文件列表加载失败。</div>";
+  }
+}
+
+async function loadUserProfile() {
+  if (!profileUsernameInput) return;
+  try {
+    const res = await fetch("/api/user/profile");
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "加载失败");
+    }
+    const profile = data.profile || {};
+    profileUsernameInput.value = profile.username || "";
+    profilePhoneInput.value = profile.phone || "";
+    profileEmailInput.value = profile.email || "";
+    profileRoleInput.value = profile.roleLabel || "";
+    profileStatusInput.value = profile.status || "正常";
+    if (profileAvatarPreview && profile.avatarUrl) {
+      profileAvatarPreview.src = profile.avatarUrl;
+    }
+    document.body.dataset.username = profile.username || document.body.dataset.username || "";
+    const homeUserLine = document.querySelector(".home-user-line");
+    if (homeUserLine && profile.username) {
+      homeUserLine.textContent = `您好，${profile.username}`;
+    }
+  } catch (e) {
+    if (profileMessage) profileMessage.textContent = e.message || "个人信息加载失败";
+  }
+}
+
+async function saveUserProfile() {
+  if (!profileUsernameInput) return;
+  if (profileMessage) profileMessage.textContent = "";
+  try {
+    const payload = {
+      username: (profileUsernameInput.value || "").trim(),
+      phone: (profilePhoneInput.value || "").trim(),
+      email: (profileEmailInput.value || "").trim(),
+    };
+    const res = await fetch("/api/user/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "保存失败");
+    if (profileMessage) profileMessage.textContent = "资料保存成功";
+    await loadUserProfile();
+  } catch (e) {
+    if (profileMessage) profileMessage.textContent = e.message || "保存失败";
+  }
+}
+
+async function uploadUserAvatar(file) {
+  if (!file) return;
+  if (profileMessage) profileMessage.textContent = "";
+  const form = new FormData();
+  form.append("avatar", file);
+  try {
+    const res = await fetch("/api/user/avatar", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "头像上传失败");
+    if (profileAvatarPreview && data.avatarUrl) {
+      profileAvatarPreview.src = data.avatarUrl;
+    }
+    if (profileMessage) profileMessage.textContent = "头像更新成功";
+  } catch (e) {
+    if (profileMessage) profileMessage.textContent = e.message || "头像上传失败";
+  }
+}
+
+async function changeUserPassword() {
+  if (!profilePwdMessage) return;
+  profilePwdMessage.textContent = "";
+  try {
+    const payload = {
+      oldPassword: profileOldPwdInput?.value || "",
+      newPassword: profileNewPwdInput?.value || "",
+      confirmPassword: profileConfirmPwdInput?.value || "",
+    };
+    const res = await fetch("/api/user/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "修改失败");
+    profilePwdMessage.textContent = "密码修改成功";
+    if (profileOldPwdInput) profileOldPwdInput.value = "";
+    if (profileNewPwdInput) profileNewPwdInput.value = "";
+    if (profileConfirmPwdInput) profileConfirmPwdInput.value = "";
+  } catch (e) {
+    profilePwdMessage.textContent = e.message || "密码修改失败";
   }
 }
 
@@ -1660,6 +2082,38 @@ moduleTabs.forEach((tab) => {
   tab.addEventListener("click", () => switchModule(tab.dataset.target));
 });
 
+caseAddBtn?.addEventListener("click", () => openCaseModal("manual", "create"));
+caseModalCloseBtn?.addEventListener("click", closeCaseModal);
+caseManualTabBtn?.addEventListener("click", () => setCaseModalTab("manual"));
+caseImportTabBtn?.addEventListener("click", () => setCaseModalTab("import"));
+caseModalSaveBtn?.addEventListener("click", submitCaseModal);
+caseSearchBtn?.addEventListener("click", async () => {
+  caseState.keyword = (caseSearchInput?.value || "").trim();
+  caseState.source = caseSourceFilter?.value || "";
+  caseState.page = 1;
+  await loadAdminCaseModule();
+});
+caseResetBtn?.addEventListener("click", async () => {
+  caseState.keyword = "";
+  caseState.source = "";
+  caseState.page = 1;
+  if (caseSearchInput) caseSearchInput.value = "";
+  if (caseSourceFilter) caseSourceFilter.value = "";
+  await loadAdminCaseModule();
+});
+caseSourceFilter?.addEventListener("change", async () => {
+  caseState.source = caseSourceFilter.value || "";
+  caseState.page = 1;
+  await loadAdminCaseModule();
+});
+
+profileSaveBtn?.addEventListener("click", saveUserProfile);
+profileAvatarInput?.addEventListener("change", (e) => {
+  const file = e?.target?.files?.[0];
+  uploadUserAvatar(file);
+});
+profilePwdBtn?.addEventListener("click", changeUserPassword);
+
 refreshFaqBtn?.addEventListener("click", loadFaqs);
 sendBtn?.addEventListener("click", () => sendMessage());
 
@@ -1767,4 +2221,4 @@ loadModels();
 loadFaqs();
 renderCitation();
 initLayoutResizer();
-switchModule("qaModule");
+switchModule(isAdminUser ? "consoleModule" : "homeModule");

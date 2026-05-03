@@ -9,13 +9,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
-<body data-username="{{ username }}">
+<body data-username="{{ username }}" data-is-admin="{{ '1' if is_admin else '0' }}">
   <div id="appShell" class="app-shell with-sidebar">
     <aside class="module-sidebar">
       <div class="module-sidebar-title">功能导航</div>
-      <button class="side-nav-item active" data-target="qaModule">智能问答</button>
+      {% if not is_admin %}
+      <button class="side-nav-item active" data-target="homeModule">首页</button>
+      {% endif %}
+      {% if is_admin %}
+      <button class="side-nav-item active" data-target="consoleModule">控制台</button>
+      {% endif %}
+      <button class="side-nav-item" data-target="qaModule">智能问答</button>
       <button class="side-nav-item" data-target="kgModule">图谱可视化</button>
       <button class="side-nav-item" data-target="diagModule">数据诊断</button>
+      {% if not is_admin %}
+      <button class="side-nav-item" data-target="profileModule">个人中心</button>
+      {% endif %}
       {% if is_admin %}
       <button class="side-nav-item" data-target="kgManageModule">图谱管理</button>
       <button class="side-nav-item" data-target="caseModule">诊断案例</button>
@@ -46,7 +55,115 @@
         </div>
       </header>
 
-      <main id="qaModule" class="content module active">
+      {% if not is_admin %}
+      <main id="homeModule" class="content module active">
+      <section class="home-hero-card">
+        <div class="home-hero-left">
+          <h1>欢迎使用风电设备故障诊断一体化问答系统</h1>
+          <p class="home-user-line">您好，{{ username or "用户" }}</p>
+          <p class="home-hero-desc">
+            面向风电运维场景的轻量化智能问答解决方案，融合知识图谱交互、检索增强问答与数据诊断能力，
+            为设备故障排查与维护决策提供专业支持。
+          </p>
+          <div class="home-hero-meta">
+            <div>
+              <strong id="homeTodayDate">--/--</strong>
+              <span>今日日期</span>
+            </div>
+            <div>
+              <strong>用户</strong>
+              <span>当前身份</span>
+            </div>
+          </div>
+        </div>
+        <div class="home-hero-right">
+          <div class="home-circle-image"></div>
+        </div>
+      </section>
+
+      <section class="home-section-head">
+        <h2>核心功能</h2>
+        <p>探索我们为风电运维提供的专业智能工具</p>
+      </section>
+
+      <section class="home-feature-grid">
+        <article class="home-feature-card">
+          <h3>知识图谱交互</h3>
+          <p>可视化展示设备故障关系网络，支持节点检索与点击联动问答。</p>
+        </article>
+        <article class="home-feature-card">
+          <h3>检索增强问答</h3>
+          <p>融合 Neo4j 图谱三元组与本地运维手册，生成可追溯的故障排查建议。</p>
+        </article>
+        <article class="home-feature-card">
+          <h3>数据诊断</h3>
+          <p>使用预训练模型完成轴承故障类型推理，实时性强，置信度高。</p>
+        </article>
+      </section>
+
+      <section class="home-section-head">
+        <h2>系统优势</h2>
+        <p>为什么选择我们的专业平台</p>
+      </section>
+
+      <section class="home-adv-grid">
+        <article class="home-adv-card">
+          <h4>图谱增强</h4>
+          <p>解决纯文本问答的逻辑缺失问题，回答更专业。</p>
+        </article>
+        <article class="home-adv-card">
+          <h4>低资源适配</h4>
+          <p>轻量化模型与 CPU 友好设计，降低部署门槛。</p>
+        </article>
+        <article class="home-adv-card">
+          <h4>场景化优化</h4>
+          <p>针对风电运维场景定制，输出结构化、可落地的诊断结果。</p>
+        </article>
+        <article class="home-adv-card">
+          <h4>快速响应</h4>
+          <p>模块协同工作，缩短定位时间，提高排查效率。</p>
+        </article>
+      </section>
+      </main>
+      {% endif %}
+
+      {% if is_admin %}
+      <main id="consoleModule" class="content module active">
+      <section class="console-hero">
+        <h1>系统控制台</h1>
+        <p>实时监控系统状态和关键统计</p>
+      </section>
+      <section class="console-summary-grid">
+        <article class="console-summary-card">
+          <div class="console-summary-value" id="consoleUserTotal">-</div>
+          <div class="console-summary-label">当前用户总数</div>
+        </article>
+        <article class="console-summary-card">
+          <div class="console-summary-value" id="consoleNodeTotal">-</div>
+          <div class="console-summary-label">图谱节点</div>
+        </article>
+        <article class="console-summary-card">
+          <div class="console-summary-value" id="consoleCaseTotal">-</div>
+          <div class="console-summary-label">案例总数</div>
+        </article>
+      </section>
+      <section class="console-chart-grid">
+        <article class="console-chart-card">
+          <h3>部件相关故障 Top10</h3>
+          <div id="consoleTop10List" class="console-top-list"></div>
+        </article>
+        <article class="console-chart-card">
+          <h3>故障发生频率分布</h3>
+          <div class="console-donut-wrap">
+            <div id="consoleFreqDonut" class="console-donut"></div>
+            <div id="consoleFreqLegend" class="console-legend"></div>
+          </div>
+        </article>
+      </section>
+      </main>
+      {% endif %}
+
+      <main id="qaModule" class="content module">
       <aside class="engineer-inline" aria-label="Q版女性工程师形象">
         <img src="{{ url_for('static', filename='assets/engineer.png') }}" alt="工程师形象" />
       </aside>
@@ -180,6 +297,52 @@
       </section>
       </main>
 
+      {% if not is_admin %}
+      <main id="profileModule" class="content module">
+      <section class="profile-head">
+        <h1>个人中心</h1>
+        <p>管理您的个人信息和账号设置</p>
+      </section>
+      <section class="profile-grid">
+        <section class="profile-card">
+          <div class="profile-card-title-row">
+            <h3>个人信息</h3>
+            <button id="profileSaveBtn" class="ghost-btn" type="button">保存资料</button>
+          </div>
+          <p class="profile-card-sub">查看和编辑您的基本信息</p>
+          <div class="profile-avatar-block">
+            <img id="profileAvatarPreview" src="{{ url_for('static', filename='assets/engineer2.png') }}" alt="头像" />
+            <label class="ghost-btn" for="profileAvatarInput">更换头像</label>
+            <input id="profileAvatarInput" type="file" accept="image/*" hidden />
+          </div>
+          <div class="profile-form-grid">
+            <label>用户名<input id="profileUsernameInput" type="text" /></label>
+            <label>手机号<input id="profilePhoneInput" type="text" /></label>
+            <label>邮箱<input id="profileEmailInput" type="email" /></label>
+            <label>角色<input id="profileRoleInput" type="text" readonly /></label>
+            <label>账号状态<input id="profileStatusInput" type="text" readonly /></label>
+          </div>
+          <div id="profileMessage" class="profile-msg"></div>
+        </section>
+        <section class="profile-card">
+          <div class="profile-card-title-row">
+            <h3>安全设置</h3>
+          </div>
+          <p class="profile-card-sub">修改您的登录密码</p>
+          <div class="profile-form-grid">
+            <label>原密码<input id="profileOldPwdInput" type="password" /></label>
+            <label>新密码<input id="profileNewPwdInput" type="password" /></label>
+            <label>确认密码<input id="profileConfirmPwdInput" type="password" /></label>
+          </div>
+          <div class="profile-actions">
+            <button id="profilePwdBtn" class="send-btn" type="button">修改密码</button>
+          </div>
+          <div id="profilePwdMessage" class="profile-msg"></div>
+        </section>
+      </section>
+      </main>
+      {% endif %}
+
       {% if is_admin %}
       <main id="kgManageModule" class="content module">
       <section class="welcome-card">
@@ -201,11 +364,21 @@
       <main id="caseModule" class="content module">
       <section class="welcome-card">
         <h1>诊断案例</h1>
-        <p>展示诊断案例”。</p>
+        <p>管理故障诊断案例，支持搜索筛选、分页查看、编辑删除和导入。</p>
       </section>
       <section class="admin-case-card">
+        <div class="case-toolbar">
+          <button id="caseAddBtn" class="send-btn" type="button">添加记录</button>
+          <select id="caseSourceFilter" class="case-input">
+            <option value="">全部来源</option>
+          </select>
+          <input id="caseSearchInput" class="case-input" type="text" placeholder="搜索故障位置/关联/后果/案例来源" />
+          <button id="caseSearchBtn" class="ghost-btn" type="button">搜索</button>
+          <button id="caseResetBtn" class="ghost-btn" type="button">重置</button>
+        </div>
         <div id="caseModuleMeta" class="admin-detail-title"></div>
         <div id="caseModuleTableWrap" class="admin-table-wrap"></div>
+        <div id="casePagination" class="case-pagination"></div>
       </section>
       </main>
       {% endif %}
@@ -235,6 +408,47 @@
       </div>
     </div>
     <div id="nodeDetailBody" class="node-detail-body"></div>
+  </section>
+
+  <section id="caseEditModal" class="case-modal hidden" aria-label="诊断案例编辑弹窗">
+    <div class="case-modal-card">
+      <div class="case-modal-head">
+        <h3 id="caseModalTitle">添加记录</h3>
+        <button id="caseModalCloseBtn" class="ghost-btn" type="button">关闭</button>
+      </div>
+      <div class="case-modal-tabs">
+        <button id="caseManualTabBtn" class="ghost-btn active" type="button">手动输入</button>
+        <button id="caseImportTabBtn" class="ghost-btn" type="button">导入CSV</button>
+      </div>
+
+      <div id="caseManualPane" class="case-modal-pane">
+        <div class="case-form-grid">
+          <label>故障位置<input id="caseFaultInput" type="text" /></label>
+          <label>关联<input id="caseRelationInput" type="text" /></label>
+          <label>后果<input id="caseConsequenceInput" type="text" /></label>
+          <label>案例来源<input id="caseSourceInput" type="text" /></label>
+        </div>
+      </div>
+
+      <div id="caseImportPane" class="case-modal-pane hidden">
+        <div class="case-form-grid">
+          <label>CSV文件<input id="caseImportFileInput" type="file" accept=".csv" /></label>
+          <label>导入方式
+            <select id="caseImportModeSelect">
+              <option value="all">导入全部数据行</option>
+              <option value="range">导入指定行范围</option>
+            </select>
+          </label>
+          <label>起始行<input id="caseImportStartInput" type="number" min="1" value="1" /></label>
+          <label>结束行<input id="caseImportEndInput" type="number" min="1" value="1" /></label>
+        </div>
+      </div>
+
+      <div class="case-modal-actions">
+        <button id="caseModalSaveBtn" class="send-btn" type="button">保存</button>
+      </div>
+      <div id="caseModalMessage" class="profile-msg"></div>
+    </div>
   </section>
 
   <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>

@@ -4,6 +4,7 @@ import os
 import time
 import csv
 import sqlite3
+from collections import Counter
 from datetime import datetime
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -12,6 +13,7 @@ from typing import List, Dict, Any, Optional
 
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 import requests
 from neo4j import GraphDatabase
 try:
@@ -715,6 +717,8 @@ CSV_KB_DIR = BASE_DIR / "csv文件"
 CASE_SOURCE_CSV_PATH = BASE_DIR / "csv新" / "风电故障诊断图谱说明.csv"
 NETWORK_FEATURE_PATH = BASE_DIR / "网络特点.txt"
 USER_DB_PATH = BASE_DIR / "users.sqlite3"
+AVATAR_UPLOAD_DIR = BASE_DIR / "static" / "uploads" / "avatars"
+ALLOWED_AVATAR_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DIAG_INPUT_LEN = 1024
 DIAG_DATASET_ROOTS = {
     "CWRU": BASE_DIR / "CRWU",
@@ -785,8 +789,27 @@ def init_user_db() -> None:
             )
             """
         )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "email" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''")
+        if "avatar_path" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_path TEXT DEFAULT ''")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS case_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fault_location TEXT NOT NULL,
+                relation_text TEXT NOT NULL,
+                consequence TEXT NOT NULL,
+                case_source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
     seed_default_admin()
+    seed_case_records()
 
 
 def seed_default_admin() -> None:
@@ -809,18 +832,79 @@ def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
         return cur.fetchone()
 
 
-def create_user(username: str, password: str, role: str, phone: str = "") -> None:
+def create_user(username: str, password: str, role: str, phone: str = "", email: str = "", avatar_path: str = "") -> None:
     password_hash = generate_password_hash(password)
     created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     with _db_connect() as conn:
         conn.execute(
-            "INSERT INTO users (username, password_hash, role, phone, created_at) VALUES (?, ?, ?, ?, ?)",
-            (username, password_hash, role, phone, created_at),
+            "INSERT INTO users (username, password_hash, role, phone, email, avatar_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (username, password_hash, role, phone, email, avatar_path, created_at),
         )
         conn.commit()
 
 
-init_user_db()
+def current_user_row() -> Optional[sqlite3.Row]:
+    username = (session.get("username") or "").strip()
+    if not username:
+        return None
+    return get_user_by_username(username)
+
+
+def user_row_to_profile(user: Optional[sqlite3.Row]) -> Dict[str, Any]:
+    if not user:
+        return {}
+    role = (user["role"] or "").strip().lower()
+    return {
+        "username": user["username"] or "",
+        "phone": user["phone"] or "",
+        "email": user["email"] or "",
+        "role": role,
+        "roleLabel": "管理员" if role == USER_ROLE_ADMIN else "普通用户",
+        "status": "正常",
+        "avatarUrl": user["avatar_path"] or "",
+    }
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def seed_case_records() -> None:
+    with _db_connect() as conn:
+        cur = conn.execute("SELECT COUNT(1) AS cnt FROM case_records")
+        row = cur.fetchone()
+        cnt = int(row["cnt"]) if row else 0
+        if cnt > 0:
+            return
+        seed_rows = load_case_rows_from_source(start_line=6, end_line=23)
+        now = _utc_now_iso()
+        for row in seed_rows:
+            conn.execute(
+                """
+                INSERT INTO case_records (fault_location, relation_text, consequence, case_source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (row.get("故障位置") or "").strip(),
+                    (row.get("关联") or "").strip(),
+                    (row.get("后果") or "").strip(),
+                    (row.get("案例来源") or "").strip(),
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+
+
+def _case_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "故障位置": row["fault_location"] or "",
+        "关联": row["relation_text"] or "",
+        "后果": row["consequence"] or "",
+        "案例来源": row["case_source"] or "",
+        "updatedAt": row["updated_at"] or "",
+    }
 
 
 def is_admin_session() -> bool:
@@ -879,6 +963,104 @@ def read_csv_rows(csv_path: Path) -> Dict[str, Any]:
             normalized = normalized[:col_len]
         normalized_rows.append(normalized)
     return {"columns": header, "rows": normalized_rows}
+
+
+def read_csv_raw_rows(csv_path: Path) -> List[List[str]]:
+    for enc in ("utf-8-sig", "gbk", "utf-8"):
+        try:
+            with csv_path.open("r", encoding=enc, newline="") as fp:
+                reader = csv.reader(fp)
+                return [list(r) for r in reader if any((cell or "").strip() for cell in r)]
+        except Exception:
+            continue
+    return []
+
+
+def normalize_case_record_payload(payload: Dict[str, Any]) -> Dict[str, str]:
+    fault_location = str(payload.get("故障位置", "") or "").strip()
+    relation_text = str(payload.get("关联", "") or "").strip()
+    consequence = str(payload.get("后果", "") or "").strip()
+    case_source = str(payload.get("案例来源", "") or "").strip()
+    if not fault_location or not relation_text or not consequence or not case_source:
+        raise ValueError("请完整填写“故障位置、关联、后果、案例来源”四项内容。")
+    return {
+        "fault_location": fault_location,
+        "relation_text": relation_text,
+        "consequence": consequence,
+        "case_source": case_source,
+    }
+
+
+init_user_db()
+
+
+def build_admin_console_stats() -> Dict[str, Any]:
+    equipment_csv = CSV_KB_DIR / "equipment.csv"
+    fault_mode_csv = CSV_KB_DIR / "fault_mode.csv"
+
+    equipment_rows = read_csv_raw_rows(equipment_csv) if equipment_csv.exists() else []
+    fault_mode_rows = read_csv_raw_rows(fault_mode_csv) if fault_mode_csv.exists() else []
+
+    equipment_names: List[str] = []
+    if len(equipment_rows) > 1:
+        for row in equipment_rows[1:]:
+            if len(row) < 2:
+                continue
+            name = str(row[1] or "").strip()
+            if name and not name.startswith("#"):
+                equipment_names.append(name)
+
+    fault_names: List[str] = []
+    freq_counter: Counter = Counter()
+    if len(fault_mode_rows) > 1:
+        for row in fault_mode_rows[1:]:
+            if len(row) < 4:
+                continue
+            fault_name = str(row[1] or "").strip()
+            freq_text = str(row[3] or "").strip()
+            if fault_name:
+                fault_names.append(fault_name)
+            if freq_text:
+                freq_counter[freq_text] += 1
+
+    comp_counter: Counter = Counter()
+    for eq in equipment_names:
+        count = 0
+        for fault_name in fault_names:
+            if eq and eq in fault_name:
+                count += 1
+        if count > 0:
+            comp_counter[eq] = count
+
+    top_components = [
+        {"name": name, "count": int(count)}
+        for name, count in sorted(comp_counter.items(), key=lambda item: item[1], reverse=True)[:10]
+    ]
+
+    with _db_connect() as conn:
+        user_row = conn.execute("SELECT COUNT(1) AS cnt FROM users").fetchone()
+        case_row = conn.execute("SELECT COUNT(1) AS cnt FROM case_records").fetchone()
+        user_total = int(user_row["cnt"]) if user_row else 0
+        case_total = int(case_row["cnt"]) if case_row else 0
+
+    node_total = 0
+    try:
+        graph = neo4j_service.get_graph(limit=2000)
+        node_total = len(graph.get("nodes") or [])
+    except Exception:
+        node_total = 0
+
+    freq_distribution = [
+        {"label": "高", "count": int(freq_counter.get("高", 0)), "color": "#ff8c8c"},
+        {"label": "中", "count": int(freq_counter.get("中", 0)), "color": "#ffe27a"},
+        {"label": "低", "count": int(freq_counter.get("低", 0)), "color": "#92e28f"},
+    ]
+
+    return {
+        "summary": {"users": user_total, "nodes": node_total, "cases": case_total},
+        "componentFaultTop10": top_components,
+        "frequencyDistribution": freq_distribution,
+    }
 
 
 def diag_dependencies_ready() -> Optional[str]:
@@ -1387,19 +1569,312 @@ def index():
     return render_template("index.html", is_admin=(role == USER_ROLE_ADMIN), username=username)
 
 
+@app.get("/api/user/profile")
+def user_profile():
+    user = current_user_row()
+    if not user:
+        return jsonify({"error": "用户不存在，请重新登录。"}), 401
+    return jsonify({"profile": user_row_to_profile(user)})
+
+
+@app.post("/api/user/profile")
+def update_user_profile():
+    user = current_user_row()
+    if not user:
+        return jsonify({"error": "用户不存在，请重新登录。"}), 401
+    payload = request.get_json(silent=True) or {}
+    new_username = str(payload.get("username", user["username"]) or "").strip()
+    phone = str(payload.get("phone", "") or "").strip()
+    email = str(payload.get("email", "") or "").strip()
+    if not new_username:
+        return jsonify({"error": "用户名不能为空。"}), 400
+    if len(new_username) > 64:
+        return jsonify({"error": "用户名长度不能超过64个字符。"}), 400
+    if len(phone) > 64 or len(email) > 128:
+        return jsonify({"error": "手机号或邮箱长度超出限制。"}), 400
+
+    if new_username != user["username"]:
+        same_name_user = get_user_by_username(new_username)
+        if same_name_user:
+            return jsonify({"error": "该用户名已存在，请更换。"}), 400
+
+    with _db_connect() as conn:
+        conn.execute(
+            "UPDATE users SET username = ?, phone = ?, email = ? WHERE id = ?",
+            (new_username, phone, email, user["id"]),
+        )
+        conn.commit()
+    session["username"] = new_username
+    refreshed = get_user_by_username(new_username)
+    return jsonify({"ok": True, "profile": user_row_to_profile(refreshed)})
+
+
+@app.post("/api/user/avatar")
+def upload_user_avatar():
+    user = current_user_row()
+    if not user:
+        return jsonify({"error": "用户不存在，请重新登录。"}), 401
+    upload = request.files.get("avatar")
+    if not upload or not upload.filename:
+        return jsonify({"error": "请先选择头像文件。"}), 400
+    ext = Path(upload.filename).suffix.lower()
+    if ext not in ALLOWED_AVATAR_EXT:
+        return jsonify({"error": "仅支持 png/jpg/jpeg/webp/gif 格式头像。"}), 400
+
+    AVATAR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = secure_filename(Path(upload.filename).stem) or "avatar"
+    file_name = f"{secure_filename(user['username'])}_{int(time.time())}_{safe_stem}{ext}"
+    target_path = AVATAR_UPLOAD_DIR / file_name
+    upload.save(target_path)
+    rel_path = f"/static/uploads/avatars/{file_name}"
+
+    with _db_connect() as conn:
+        conn.execute("UPDATE users SET avatar_path = ? WHERE id = ?", (rel_path, user["id"]))
+        conn.commit()
+    refreshed = get_user_by_username(user["username"])
+    return jsonify({"ok": True, "avatarUrl": rel_path, "profile": user_row_to_profile(refreshed)})
+
+
+@app.post("/api/user/password")
+def update_user_password():
+    user = current_user_row()
+    if not user:
+        return jsonify({"error": "用户不存在，请重新登录。"}), 401
+    payload = request.get_json(silent=True) or {}
+    old_password = str(payload.get("oldPassword", "") or "")
+    new_password = str(payload.get("newPassword", "") or "")
+    confirm_password = str(payload.get("confirmPassword", "") or "")
+    if not old_password or not new_password or not confirm_password:
+        return jsonify({"error": "请完整填写原密码、新密码、确认密码。"}), 400
+    if new_password != confirm_password:
+        return jsonify({"error": "两次输入的新密码不一致。"}), 400
+    if len(new_password) < 6:
+        return jsonify({"error": "新密码长度至少为6位。"}), 400
+    if not check_password_hash(user["password_hash"], old_password):
+        return jsonify({"error": "原密码错误。"}), 400
+    with _db_connect() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(new_password), user["id"]))
+        conn.commit()
+    return jsonify({"ok": True, "message": "密码修改成功。"})
+
+
 @app.get("/api/admin/case-module")
 def admin_case_module():
     if not is_admin_session():
         return jsonify({"error": "仅管理员可访问"}), 403
-    rows = load_case_rows_from_source(start_line=6, end_line=23)
+    with _db_connect() as conn:
+        cur = conn.execute(
+            "SELECT id, fault_location, relation_text, consequence, case_source, updated_at FROM case_records ORDER BY id DESC LIMIT 10"
+        )
+        rows = [_case_row_to_dict(r) for r in cur.fetchall()]
+    return jsonify({"columns": ["故障位置", "关联", "后果", "案例来源"], "rows": rows, "pageSize": 10})
+
+
+@app.get("/api/admin/case-records")
+def admin_case_records():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    page = max(1, request.args.get("page", default=1, type=int))
+    page_size = min(50, max(1, request.args.get("pageSize", default=10, type=int)))
+    keyword = (request.args.get("keyword") or "").strip()
+    source_filter = (request.args.get("source") or "").strip()
+
+    where_sql = []
+    where_args: List[Any] = []
+    if keyword:
+        where_sql.append("(fault_location LIKE ? OR relation_text LIKE ? OR consequence LIKE ? OR case_source LIKE ?)")
+        like_kw = f"%{keyword}%"
+        where_args.extend([like_kw, like_kw, like_kw, like_kw])
+    if source_filter:
+        where_sql.append("case_source = ?")
+        where_args.append(source_filter)
+    where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
+    offset = (page - 1) * page_size
+
+    with _db_connect() as conn:
+        count_row = conn.execute(f"SELECT COUNT(1) AS cnt FROM case_records {where_clause}", tuple(where_args)).fetchone()
+        total = int(count_row["cnt"]) if count_row else 0
+        cur = conn.execute(
+            f"""
+            SELECT id, fault_location, relation_text, consequence, case_source, updated_at
+            FROM case_records
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(where_args + [page_size, offset]),
+        )
+        rows = [_case_row_to_dict(r) for r in cur.fetchall()]
+        source_rows = conn.execute("SELECT DISTINCT case_source FROM case_records ORDER BY case_source ASC").fetchall()
+        source_options = [str(r["case_source"] or "").strip() for r in source_rows if str(r["case_source"] or "").strip()]
+
+    pages = (total + page_size - 1) // page_size if total else 1
     return jsonify(
         {
             "columns": ["故障位置", "关联", "后果", "案例来源"],
             "rows": rows,
-            "source": str(CASE_SOURCE_CSV_PATH.name),
-            "lineRange": "6-23",
+            "pagination": {"page": page, "pageSize": page_size, "total": total, "pages": pages},
+            "sourceOptions": source_options,
         }
     )
+
+
+@app.post("/api/admin/case-records")
+def admin_case_record_create():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        normalized = normalize_case_record_payload(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    now = _utc_now_iso()
+    with _db_connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO case_records (fault_location, relation_text, consequence, case_source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized["fault_location"],
+                normalized["relation_text"],
+                normalized["consequence"],
+                normalized["case_source"],
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.put("/api/admin/case-records/<int:record_id>")
+def admin_case_record_update(record_id: int):
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        normalized = normalize_case_record_payload(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    with _db_connect() as conn:
+        cur = conn.execute("SELECT id FROM case_records WHERE id = ?", (record_id,))
+        if not cur.fetchone():
+            return jsonify({"error": "记录不存在。"}), 404
+        conn.execute(
+            """
+            UPDATE case_records
+            SET fault_location = ?, relation_text = ?, consequence = ?, case_source = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized["fault_location"],
+                normalized["relation_text"],
+                normalized["consequence"],
+                normalized["case_source"],
+                _utc_now_iso(),
+                record_id,
+            ),
+        )
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/admin/case-records/<int:record_id>")
+def admin_case_record_delete(record_id: int):
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    with _db_connect() as conn:
+        conn.execute("DELETE FROM case_records WHERE id = ?", (record_id,))
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/admin/case-records/import")
+def admin_case_record_import():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "请上传CSV文件。"}), 400
+    if Path(upload.filename).suffix.lower() != ".csv":
+        return jsonify({"error": "仅支持导入CSV文件。"}), 400
+    import_mode = (request.form.get("importMode") or "all").strip().lower()
+    try:
+        start_row = max(1, int(request.form.get("startRow", "1") or "1"))
+        end_row = max(1, int(request.form.get("endRow", "1") or "1"))
+    except Exception:
+        return jsonify({"error": "行范围参数无效，请输入正整数。"}), 400
+
+    tmp_name = f"tmp_case_import_{int(time.time() * 1000)}.csv"
+    tmp_path = BASE_DIR / tmp_name
+    upload.save(tmp_path)
+    try:
+        rows = read_csv_raw_rows(tmp_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+    if not rows:
+        return jsonify({"error": "CSV文件为空或读取失败。"}), 400
+
+    header = [str(c).strip() for c in rows[0]]
+    if {"故障位置", "关联", "后果", "案例来源"}.issubset(set(header)):
+        rows = rows[1:]
+    if not rows:
+        return jsonify({"error": "CSV文件没有可导入的数据行。"}), 400
+
+    picked_rows = rows
+    if import_mode == "range":
+        if start_row > end_row:
+            return jsonify({"error": "起始行不能大于结束行。"}), 400
+        if start_row > len(rows):
+            return jsonify({"error": "起始行超出CSV有效数据行范围。"}), 400
+        picked_rows = rows[start_row - 1 : min(end_row, len(rows))]
+
+    if not picked_rows:
+        return jsonify({"error": "未选中任何可导入行。"}), 400
+
+    now = _utc_now_iso()
+    inserted = 0
+    with _db_connect() as conn:
+        for row in picked_rows:
+            normalized = [str(c or "").strip() for c in row]
+            while len(normalized) < 4:
+                normalized.append("")
+            payload = {
+                "故障位置": normalized[0],
+                "关联": normalized[1],
+                "后果": normalized[2],
+                "案例来源": normalized[3],
+            }
+            try:
+                rec = normalize_case_record_payload(payload)
+            except ValueError:
+                continue
+            conn.execute(
+                """
+                INSERT INTO case_records (fault_location, relation_text, consequence, case_source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (rec["fault_location"], rec["relation_text"], rec["consequence"], rec["case_source"], now, now),
+            )
+            inserted += 1
+        conn.commit()
+
+    if inserted == 0:
+        return jsonify({"error": "导入失败：所选行缺少必要字段。"}), 400
+    return jsonify({"ok": True, "imported": inserted})
+
+
+@app.get("/api/admin/console")
+def admin_console():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    return jsonify(build_admin_console_stats())
 
 
 @app.get("/api/admin/csv-files")

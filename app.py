@@ -3,6 +3,8 @@ import re
 import os
 import time
 import csv
+import math
+import hashlib
 import sqlite3
 import threading
 from collections import Counter
@@ -17,6 +19,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import requests
 from neo4j import GraphDatabase
+try:
+    import chromadb
+except Exception:
+    chromadb = None
 try:
     import numpy as np
 except Exception:
@@ -481,6 +487,123 @@ class KnowledgeBase:
         return {"answer": answer, "sources": sources}
 
 
+class HashEmbeddingFunction:
+    """轻量哈希向量，避免部署时依赖大体积嵌入模型。"""
+
+    def __init__(self, dim: int = 256) -> None:
+        self.dim = max(64, int(dim))
+
+    @staticmethod
+    def _tokens(text: str) -> List[str]:
+        return re.findall(r"[\u4e00-\u9fff]+|[a-zA-Z0-9_]+", (text or "").lower())
+
+    def _encode_one(self, text: str) -> List[float]:
+        vec = [0.0] * self.dim
+        tokens = self._tokens(text)
+        if not tokens:
+            return vec
+        for token in tokens:
+            digest = hashlib.md5(token.encode("utf-8")).hexdigest()
+            idx = int(digest[:8], 16) % self.dim
+            vec[idx] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    def __call__(self, input: Any) -> List[List[float]]:
+        texts = input if isinstance(input, list) else [input]
+        return [self._encode_one(str(t or "")) for t in texts]
+
+
+class ChromaHybridRetriever:
+    def __init__(self, kb_ref: KnowledgeBase, persist_dir: Path) -> None:
+        self.kb_ref = kb_ref
+        self.persist_dir = persist_dir
+        self.available = False
+        self.last_error = ""
+        self.collection = None
+        self._lock = threading.Lock()
+        self._init_client()
+
+    def _init_client(self) -> None:
+        if chromadb is None:
+            self.available = False
+            self.last_error = "未安装 chromadb，已自动降级到本地关键词检索。"
+            return
+        try:
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+            client = chromadb.PersistentClient(path=str(self.persist_dir))
+            self.collection = client.get_or_create_collection(
+                name="wind_kb_chunks",
+                embedding_function=HashEmbeddingFunction(dim=256),
+            )
+            self.sync_from_kb(self.kb_ref)
+            self.available = True
+            self.last_error = ""
+        except Exception as exc:
+            self.collection = None
+            self.available = False
+            self.last_error = f"Chroma 初始化失败：{exc}"
+
+    def sync_from_kb(self, kb_ref: KnowledgeBase) -> None:
+        self.kb_ref = kb_ref
+        if not self.collection:
+            return
+        with self._lock:
+            try:
+                existing = self.collection.get()
+                existing_ids = existing.get("ids") or []
+                if existing_ids:
+                    self.collection.delete(ids=existing_ids)
+                ids: List[str] = []
+                docs: List[str] = []
+                metas: List[Dict[str, Any]] = []
+                for idx, chunk in enumerate(self.kb_ref.chunks):
+                    ids.append(f"chunk_{idx}")
+                    docs.append(chunk.text or "")
+                    metas.append({"title": chunk.title or "", "source": chunk.source or ""})
+                if ids:
+                    self.collection.add(ids=ids, documents=docs, metadatas=metas)
+                self.available = True
+                self.last_error = ""
+            except Exception as exc:
+                self.available = False
+                self.last_error = f"Chroma 索引同步失败：{exc}"
+
+    def retrieve(self, query: str, top_k: int = 6) -> List[Dict[str, Any]]:
+        if not self.collection or not self.available:
+            return []
+        q = (query or "").strip()
+        if not q:
+            return []
+        try:
+            data = self.collection.query(
+                query_texts=[q],
+                n_results=max(1, min(int(top_k), 20)),
+                include=["documents", "metadatas", "distances"],
+            )
+            docs = (data.get("documents") or [[]])[0]
+            metas = (data.get("metadatas") or [[]])[0]
+            dists = (data.get("distances") or [[]])[0]
+            out: List[Dict[str, Any]] = []
+            for i in range(min(len(docs), len(metas), len(dists))):
+                dist = float(dists[i] or 0.0)
+                score = 1.0 / (1.0 + max(0.0, dist))
+                meta = metas[i] or {}
+                out.append(
+                    {
+                        "title": str(meta.get("title") or "文档片段"),
+                        "text": str(docs[i] or ""),
+                        "source": str(meta.get("source") or "chroma"),
+                        "score": round(score, 6),
+                    }
+                )
+            return out
+        except Exception as exc:
+            self.available = False
+            self.last_error = f"Chroma 检索失败：{exc}"
+            return []
+
+
 class Neo4jService:
     def __init__(self, uri: str, user: str, password: str, database: str) -> None:
         self.uri = uri
@@ -723,6 +846,7 @@ KB_PATHS = [
     BASE_DIR / "data" / "wind_power_qa.md",
 ]
 CSV_KB_DIR = BASE_DIR / "csv文件"
+CHROMA_DB_DIR = BASE_DIR / "chroma_db"
 CASE_SOURCE_CSV_PATH = BASE_DIR / "csv新" / "风电故障诊断图谱说明.csv"
 NETWORK_FEATURE_PATH = BASE_DIR / "网络特点.txt"
 USER_DB_PATH = BASE_DIR / "users.sqlite3"
@@ -773,9 +897,15 @@ DIAG_CLASS_NAMES = {
 DIAG_MODEL_CACHE: Dict[str, Any] = {}
 QA_ONLY_SOURCE = "wind_power_qa"
 kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
+chroma_retriever = ChromaHybridRetriever(kb, CHROMA_DB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
-# ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
 cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
+
+
+def refresh_knowledge_indexes() -> None:
+    global kb
+    kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
+    chroma_retriever.sync_from_kb(kb)
 
 '''
 def warmup_neo4j_async(retries: int = 6, interval_sec: float = 2.0) -> None:
@@ -1461,6 +1591,47 @@ def ensure_complete_sentences(text: str) -> str:
     return "\n".join(completed)
 
 
+FAULT_KEYWORDS = {
+    "故障", "异常", "报警", "告警", "停机", "检修", "维修", "排查", "诊断", "根因", "失效",
+    "轴承", "齿轮箱", "主轴", "叶片", "发电机", "变桨", "偏航", "温度", "振动", "电流", "润滑", "油温",
+}
+CASUAL_PATTERNS = re.compile(r"^(你好|您好|hi|hello|在吗|谢谢|再见|讲个笑话|今天天气|你是谁|介绍一下)")
+
+
+def detect_query_intent(query: str, graph_node: str = "") -> str:
+    q = (query or "").strip().lower()
+    if graph_node:
+        return "fault"
+    if not q:
+        return "casual"
+    if CASUAL_PATTERNS.search(q):
+        return "casual"
+    if any(k in q for k in FAULT_KEYWORDS):
+        return "fault"
+    if len(q) <= 8 and not re.search(r"故障|异常|报警|温度|振动", q):
+        return "casual"
+    return "fault"
+
+
+def hybrid_kb_retrieve(query: str, focus_terms: Optional[List[str]] = None, top_k: int = 8) -> List[Dict[str, Any]]:
+    focus_terms = [t for t in (focus_terms or []) if t]
+    chroma_hits = chroma_retriever.retrieve(query, top_k=top_k)
+    local_hits = kb.retrieve(query, top_k=max(top_k, 8), focus_terms=focus_terms)
+    merged: List[Dict[str, Any]] = []
+    merged.extend(chroma_hits)
+    merged.extend(local_hits)
+    dedup: List[Dict[str, Any]] = []
+    seen = set()
+    for item in merged:
+        key = (item.get("title") or "", item.get("source") or "", item.get("text") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(item)
+    dedup.sort(key=lambda it: float(it.get("score", 0.0)), reverse=True)
+    return dedup[:top_k]
+
+
 def build_citation_fallback(
     query: str,
     graph_node: str,
@@ -1906,16 +2077,64 @@ def admin_console():
     return jsonify(build_admin_console_stats())
 
 
-@app.get("/api/admin/csv-files")
-def admin_csv_files():
+def _kb_file_category(name: str) -> str:
+    low = (name or "").lower()
+    if "relation" in low or low.startswith("rel_"):
+        return "relation"
+    if any(k in low for k in ["node", "equipment", "fault", "alarm", "part", "event"]):
+        return "node"
+    return "other"
+
+
+@app.get("/api/admin/kb-files")
+def admin_kb_files():
     if not is_admin_session():
         return jsonify({"error": "仅管理员可访问"}), 403
-    files = sorted([p.name for p in CSV_KB_DIR.glob("*.csv")])
-    return jsonify({"files": files, "count": len(files), "folder": str(CSV_KB_DIR)})
+    page = max(1, request.args.get("page", default=1, type=int))
+    page_size = min(50, max(5, request.args.get("pageSize", default=10, type=int)))
+    keyword = (request.args.get("keyword") or "").strip().lower()
+    category = (request.args.get("category") or "").strip().lower()
+
+    files = sorted([p for p in CSV_KB_DIR.glob("*.csv") if p.is_file()], key=lambda p: p.name.lower())
+    rows: List[Dict[str, Any]] = []
+    for path in files:
+        parsed = read_csv_rows(path)
+        item = {
+            "file": path.name,
+            "category": _kb_file_category(path.name),
+            "rowCount": len(parsed.get("rows") or []),
+            "columnCount": len(parsed.get("columns") or []),
+            "sizeKB": round(path.stat().st_size / 1024.0, 2),
+            "updatedAt": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        rows.append(item)
+
+    if keyword:
+        rows = [r for r in rows if keyword in str(r.get("file", "")).lower()]
+    if category and category != "all":
+        rows = [r for r in rows if str(r.get("category", "")) == category]
+
+    total = len(rows)
+    pages = (total + page_size - 1) // page_size if total else 1
+    page = min(page, pages)
+    offset = (page - 1) * page_size
+    page_rows = rows[offset : offset + page_size]
+    return jsonify(
+        {
+            "rows": page_rows,
+            "pagination": {"page": page, "pageSize": page_size, "total": total, "pages": pages},
+            "categoryOptions": [
+                {"value": "all", "label": "全部类型"},
+                {"value": "node", "label": "节点类"},
+                {"value": "relation", "label": "关系类"},
+                {"value": "other", "label": "其他"},
+            ],
+        }
+    )
 
 
-@app.get("/api/admin/csv-files/<path:filename>")
-def admin_csv_file_detail(filename: str):
+@app.get("/api/admin/kb-files/<path:filename>")
+def admin_kb_file_detail(filename: str):
     if not is_admin_session():
         return jsonify({"error": "仅管理员可访问"}), 403
     safe_name = Path(filename).name
@@ -1932,8 +2151,29 @@ def admin_csv_file_detail(filename: str):
             "columns": parsed["columns"],
             "rows": parsed["rows"],
             "rowCount": len(parsed["rows"]),
+            "category": _kb_file_category(safe_name),
         }
     )
+
+
+@app.post("/api/admin/kb-files/upload")
+def admin_kb_file_upload():
+    if not is_admin_session():
+        return jsonify({"error": "仅管理员可访问"}), 403
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "请先选择CSV文件。"}), 400
+    ext = Path(upload.filename).suffix.lower()
+    if ext != ".csv":
+        return jsonify({"error": "仅支持上传CSV文件。"}), 400
+    CSV_KB_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = secure_filename(Path(upload.filename).name)
+    if not safe_name:
+        safe_name = f"kb_{int(time.time())}.csv"
+    target = CSV_KB_DIR / safe_name
+    upload.save(target)
+    refresh_knowledge_indexes()
+    return jsonify({"ok": True, "file": safe_name, "message": "CSV 已加入知识库参考并完成索引更新。"})
 
 
 @app.get("/api/diag/options")
@@ -2045,9 +2285,7 @@ def get_status():
             },
             "cloud_llm": {
                 "available": cloud_llm.available(),
-                #"baseUrl": cloud_llm.base_url,
                 "defaultModel": cloud_llm.default_model,
-                #"recommendedModel": cloud_llm.recommended_model(ollama_models),
                 "models": models,
                 "error": cloud_llm.last_error,
             },
@@ -2066,18 +2304,6 @@ def neo4j_config():
     )
     ok = neo4j_service.available()
     return jsonify({"ok": ok, "error": neo4j_service.last_error, "uri": neo4j_service.uri, "database": neo4j_service.database})
-
-'''
-@app.post("/api/ollama/config")
-def ollama_config():
-    payload = request.get_json(silent=True) or {}
-    cloud_llm.update_config(
-        base_url=(payload.get("baseUrl") or "").strip(),
-        default_model=(payload.get("defaultModel") or "").strip(),
-    )
-    models = cloud_llm.list_models()
-    return jsonify({"ok": len(models) > 0, "models": models, "error": cloud_llm.last_error, "default": cloud_llm.default_model})
-'''
 
 @app.get("/api/kg/graph")
 def kg_graph():
@@ -2125,12 +2351,40 @@ def chat():
     if image_name and not query:
         return jsonify(kb.answer(query, image_name=image_name))
 
+    intent = detect_query_intent(query, graph_node=graph_node)
+    if intent == "casual" and query and not graph_node:
+        plain_text = cloud_llm.chat(
+            f"用户问题：{query}\n请直接回答，语气自然，控制在120字以内。",
+            model=model_name,
+            max_models_to_try=1,
+            timeout_seconds_override=60,
+        )
+        answer = ensure_complete_sentences(plain_text or "你好，我可以继续为你解答风电设备相关问题。")
+        return jsonify(
+            {
+                "answer": answer,
+                "sources": [],
+                "evidence": {
+                    "intent": "casual",
+                    "kb": [],
+                    "kg": [],
+                    "llm": {
+                        "model": cloud_llm.last_model or model_name or cloud_llm.default_model,
+                        "used": True,
+                        "httpOk": cloud_llm.last_http_ok,
+                        "status": "success" if plain_text else "fallback",
+                        "latencyMs": int((time.perf_counter() - started_at) * 1000),
+                        "error": cloud_llm.last_error,
+                    },
+                },
+            }
+        )
+
     focus_terms = [term for term in [graph_node] if term]
-    kb_hits_all = kb.retrieve(query, top_k=10, focus_terms=focus_terms) if query else []
     exact_csv_hits = kb.exact_csv_matches(graph_node or query, top_k=3)
+    kb_hits_all = hybrid_kb_retrieve(query, focus_terms=focus_terms, top_k=10) if query else []
     kb_hits = exact_csv_hits + [
-        it for it in kb_hits_all
-        if it.get("source") == QA_ONLY_SOURCE or str(it.get("source", "")).startswith("csv:")
+        it for it in kb_hits_all if str(it.get("source", "")).startswith("csv:") or it.get("source") == QA_ONLY_SOURCE
     ]
     dedup_kb: List[Dict[str, Any]] = []
     seen_titles = set()
@@ -2152,15 +2406,15 @@ def chat():
         kg_hits = neo4j_service.search_triplets(graph_node or query, limit=8) if (graph_node or query) else []
 
     context_blocks = []
+    if kg_hits:
+        context_blocks.append(
+            "【知识图谱结构化证据】\n" + "\n".join([f"- ({t['head']})-[{t['rel']}]->({t['tail']})" for t in kg_hits])
+        )
     if graph_node:
         context_blocks.append(f"【当前图谱节点】\n- {graph_node}")
     if kb_hits:
         context_blocks.append(
-            "【文本知识库】\n" + "\n".join([f"- {it['title']}: {it['text'][:110]}" for it in kb_hits])
-        )
-    if kg_hits:
-        context_blocks.append(
-            "【知识图谱三元组】\n" + "\n".join([f"- ({t['head']})-[{t['rel']}]->({t['tail']})" for t in kg_hits])
+            "【文档片段补充（RAG/Chroma）】\n" + "\n".join([f"- {it['title']}: {it['text'][:110]}" for it in kb_hits])
         )
 
     if not context_blocks and query:
@@ -2187,10 +2441,9 @@ def chat():
     else:
         prompt_head = "你是工业设备故障问答助手。优先基于提供的上下文，结论简洁、可执行。"
 
-    llm_num_predict = 220 if is_citation_mode else (256 if is_kg_auto_mode else None)
+    llm_num_predict = 220 if is_citation_mode else (256 if is_kg_auto_mode else 320)
     llm_timeout = 180 if is_citation_mode else (180 if is_kg_auto_mode else None)
-  
-    llm_try_count = (2 if is_citation_mode else (1 if is_kg_auto_mode else 3))
+
     quick_citation = bool(is_citation_mode and len(query) <= 8 and (exact_csv_hits or kg_hits))
 
     if quick_citation:
@@ -2258,6 +2511,12 @@ def chat():
         sources.append({"title": "知识图谱", "snippet": f"命中 {len(kg_hits)} 条相关三元组"})
 
     evidence = {
+        "intent": "fault",
+        "retrieval": {
+            "mode": "kg_then_rag",
+            "chromaAvailable": chroma_retriever.available,
+            "chromaError": chroma_retriever.last_error,
+        },
         "kb": [
             {"title": it["title"], "text": it["text"][:220], "score": round(float(it.get("score", 1.0)), 4)}
             for it in kb_hits

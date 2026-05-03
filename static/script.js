@@ -43,8 +43,16 @@ const nodeDetailShrinkBtn = document.getElementById("nodeDetailShrinkBtn");
 const nodeDetailGrowBtn = document.getElementById("nodeDetailGrowBtn");
 const nodeDetailCloseBtn = document.getElementById("nodeDetailCloseBtn");
 const kgConnPanel = document.getElementById("kgConnPanel");
-const kgManageFileList = document.getElementById("kgManageFileList");
+const kgUploadBtn = document.getElementById("kgUploadBtn");
+const kgUploadInput = document.getElementById("kgUploadInput");
+const kgCategoryFilter = document.getElementById("kgCategoryFilter");
+const kgSearchInput = document.getElementById("kgSearchInput");
+const kgSearchBtnManage = document.getElementById("kgSearchBtnManage");
+const kgResetBtnManage = document.getElementById("kgResetBtnManage");
+const kgManageMeta = document.getElementById("kgManageMeta");
+const kgManageListWrap = document.getElementById("kgManageListWrap");
 const kgManageDetailTitle = document.getElementById("kgManageDetailTitle");
+const kgManagePagination = document.getElementById("kgManagePagination");
 const kgManageTableWrap = document.getElementById("kgManageTableWrap");
 const consoleUserTotal = document.getElementById("consoleUserTotal");
 const consoleNodeTotal = document.getElementById("consoleNodeTotal");
@@ -146,6 +154,16 @@ const caseState = {
   editId: null,
   modalMode: "manual",
   sourceOptions: [],
+};
+const kbManageState = {
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  pages: 1,
+  keyword: "",
+  category: "all",
+  categoryOptions: [],
+  selectedFile: "",
 };
 let DIAG_MODEL_TIPS = {
   cnn: "专为一维时序振动信号设计，通过浅层卷积快速提取局部时域特征，适合数据量中等、追求轻量化快速推理的轴承故障诊断。",
@@ -249,7 +267,7 @@ function switchModule(targetId) {
       dateEl.textContent = `${now.getMonth() + 1}/${now.getDate()}`;
     }
   } else if (targetId === "kgManageModule") {
-    loadAdminCsvFiles();
+    loadAdminKbFiles();
   } else if (targetId === "caseModule") {
     loadAdminCaseModule();
   } else if (targetId === "profileModule") {
@@ -965,14 +983,14 @@ async function submitCaseModal() {
   }
 }
 
-async function loadAdminCsvFileDetail(filename) {
-  if (!kgManageTableWrap || !kgManageDetailTitle) {
+async function loadAdminKbFileDetail(filename) {
+  if (!kgManageTableWrap || !kgManageDetailTitle || !filename) {
     return;
   }
-  kgManageDetailTitle.textContent = `正在加载：${filename}`;
+  kgManageDetailTitle.textContent = `正在读取 ${filename} ...`;
   kgManageTableWrap.innerHTML = "<div class='admin-empty'>正在读取CSV内容...</div>";
   try {
-    const res = await fetch(`/api/admin/csv-files/${encodeURIComponent(filename)}`);
+    const res = await fetch(`/api/admin/kb-files/${encodeURIComponent(filename)}`);
     if (res.status === 401) {
       window.location.href = "/login";
       return;
@@ -982,54 +1000,111 @@ async function loadAdminCsvFileDetail(filename) {
       kgManageTableWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "读取失败")}</div>`;
       return;
     }
-    kgManageDetailTitle.textContent = `${data.file}（数据行 ${data.rowCount || 0}）`;
+    kbManageState.selectedFile = data.file || filename;
+    kgManageDetailTitle.textContent = `${data.file}（${data.category || "other"}，数据行 ${data.rowCount || 0}）`;
     renderAdminTable(kgManageTableWrap, data.columns || [], data.rows || []);
   } catch (e) {
     kgManageTableWrap.innerHTML = "<div class='admin-empty'>CSV内容加载失败。</div>";
   }
 }
 
-async function loadAdminCsvFiles() {
-  if (!kgManageFileList || !kgManageTableWrap || !kgManageDetailTitle) {
+function renderKbCategoryFilter() {
+  if (!kgCategoryFilter) return;
+  const options = (kbManageState.categoryOptions || [])
+    .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+  kgCategoryFilter.innerHTML = options || `<option value="all">全部类型</option>`;
+  kgCategoryFilter.value = kbManageState.category || "all";
+}
+
+function renderKbManageTable(rows) {
+  if (!kgManageListWrap) return;
+  const columns = ["文件名", "类型", "行数", "列数", "大小(KB)", "更新时间", "操作"];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const thead = `<tr>${columns.map((c) => `<th>${c}</th>`).join("")}</tr>`;
+  const tbody = safeRows.length
+    ? safeRows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.file || "")}</td>
+        <td>${escapeHtml(row.category || "")}</td>
+        <td>${Number(row.rowCount || 0)}</td>
+        <td>${Number(row.columnCount || 0)}</td>
+        <td>${Number(row.sizeKB || 0).toFixed(2)}</td>
+        <td>${escapeHtml(row.updatedAt || "")}</td>
+        <td><button class="case-op-btn" data-file="${escapeHtml(row.file || "")}">查看内容</button></td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="7">暂无数据</td></tr>`;
+  kgManageListWrap.innerHTML = `<div class="admin-table-scroll"><table class="admin-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+  kgManageListWrap.querySelectorAll(".case-op-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const f = btn.getAttribute("data-file") || "";
+      await loadAdminKbFileDetail(f);
+    });
+  });
+}
+
+function renderKbManagePagination() {
+  if (!kgManagePagination) return;
+  const page = kbManageState.page;
+  const pages = kbManageState.pages;
+  kgManagePagination.innerHTML = `
+    <span>第 ${page} / ${pages} 页</span>
+    <button class="case-page-btn" id="kgPrevPageBtn" ${page <= 1 ? "disabled" : ""}>上一页</button>
+    <button class="case-page-btn" id="kgNextPageBtn" ${page >= pages ? "disabled" : ""}>下一页</button>
+  `;
+  document.getElementById("kgPrevPageBtn")?.addEventListener("click", async () => {
+    if (kbManageState.page <= 1) return;
+    kbManageState.page -= 1;
+    await loadAdminKbFiles();
+  });
+  document.getElementById("kgNextPageBtn")?.addEventListener("click", async () => {
+    if (kbManageState.page >= kbManageState.pages) return;
+    kbManageState.page += 1;
+    await loadAdminKbFiles();
+  });
+}
+
+async function loadAdminKbFiles() {
+  if (!kgManageListWrap || !kgManageTableWrap || !kgManageDetailTitle) {
     return;
   }
-  kgManageFileList.innerHTML = "<div class='admin-empty'>正在加载CSV文件列表...</div>";
+  kgManageListWrap.innerHTML = "<div class='admin-empty'>正在加载知识库CSV列表...</div>";
   try {
-    const res = await fetch("/api/admin/csv-files");
+    const params = new URLSearchParams({
+      page: String(kbManageState.page),
+      pageSize: String(kbManageState.pageSize),
+      keyword: kbManageState.keyword || "",
+      category: kbManageState.category || "all",
+    });
+    const res = await fetch(`/api/admin/kb-files?${params.toString()}`);
     if (res.status === 401) {
       window.location.href = "/login";
       return;
     }
     const data = await res.json();
     if (!res.ok) {
-      kgManageFileList.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "加载失败")}</div>`;
+      kgManageListWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(data.error || "加载失败")}</div>`;
       return;
     }
-    const files = Array.isArray(data.files) ? data.files : [];
-    if (files.length === 0) {
-      kgManageFileList.innerHTML = "<div class='admin-empty'>未发现CSV文件。</div>";
-      kgManageTableWrap.innerHTML = "";
-      kgManageDetailTitle.textContent = "暂无可查看文件";
-      return;
+    const pg = data.pagination || {};
+    kbManageState.page = Number(pg.page || 1);
+    kbManageState.pageSize = Number(pg.pageSize || 10);
+    kbManageState.total = Number(pg.total || 0);
+    kbManageState.pages = Math.max(1, Number(pg.pages || 1));
+    kbManageState.categoryOptions = Array.isArray(data.categoryOptions) ? data.categoryOptions : [];
+    renderKbCategoryFilter();
+    if (kgManageMeta) {
+      kgManageMeta.textContent = `共 ${kbManageState.total} 个 CSV 参考文件，每页 ${kbManageState.pageSize} 条`;
     }
-    kgManageFileList.innerHTML = files
-      .map((f) => `<button class="admin-file-item" data-file="${escapeHtml(f)}">${escapeHtml(f)}</button>`)
-      .join("");
-    kgManageFileList.querySelectorAll(".admin-file-item").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const picked = btn.getAttribute("data-file") || "";
-        kgManageFileList.querySelectorAll(".admin-file-item").forEach((node) => node.classList.remove("active"));
-        btn.classList.add("active");
-        loadAdminCsvFileDetail(picked);
-      });
-    });
-    const firstBtn = kgManageFileList.querySelector(".admin-file-item");
-    if (firstBtn) {
-      firstBtn.classList.add("active");
-      await loadAdminCsvFileDetail(firstBtn.getAttribute("data-file") || "");
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    renderKbManageTable(rows);
+    renderKbManagePagination();
+    if (!kbManageState.selectedFile && rows.length) {
+      await loadAdminKbFileDetail(rows[0].file || "");
     }
   } catch (e) {
-    kgManageFileList.innerHTML = "<div class='admin-empty'>CSV文件列表加载失败。</div>";
+    kgManageListWrap.innerHTML = "<div class='admin-empty'>知识库文件列表加载失败。</div>";
   }
 }
 
@@ -1448,7 +1523,7 @@ async function loadModels() {
     const data = await res.json();
     modelSelect.innerHTML = "";
 
-    const models = data.models && data.models.length > 0 ? data.models : [data.default || "qwen3:4b"];
+    const models = data.models && data.models.length > 0 ? data.models : [data.default || "Qwen/Qwen3-8B"];
     models.forEach((name) => {
       const op = document.createElement("option");
       op.value = name;
@@ -1460,7 +1535,7 @@ async function loadModels() {
       ? data.default
       : (data.recommended && models.includes(data.recommended) ? data.recommended : models[0]);
   } catch (e) {
-    modelSelect.innerHTML = "<option value='qwen3:4b'>qwen3:4b</option>";
+    modelSelect.innerHTML = "<option value='Qwen/Qwen3-8B'>Qwen/Qwen3-8B</option>";
   }
 }
 
@@ -2166,6 +2241,46 @@ caseSourceFilter?.addEventListener("change", async () => {
   await loadAdminCaseModule();
 });
 
+kgUploadBtn?.addEventListener("click", () => kgUploadInput?.click());
+kgUploadInput?.addEventListener("change", async () => {
+  const file = kgUploadInput?.files?.[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await fetch("/api/admin/kb-files/upload", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "上传失败");
+    kbManageState.page = 1;
+    kbManageState.selectedFile = data.file || "";
+    await loadAdminKbFiles();
+  } catch (e) {
+    window.alert(e.message || "上传失败");
+  } finally {
+    if (kgUploadInput) kgUploadInput.value = "";
+  }
+});
+kgSearchBtnManage?.addEventListener("click", async () => {
+  kbManageState.keyword = (kgSearchInput?.value || "").trim();
+  kbManageState.category = kgCategoryFilter?.value || "all";
+  kbManageState.page = 1;
+  await loadAdminKbFiles();
+});
+kgResetBtnManage?.addEventListener("click", async () => {
+  kbManageState.keyword = "";
+  kbManageState.category = "all";
+  kbManageState.page = 1;
+  kbManageState.selectedFile = "";
+  if (kgSearchInput) kgSearchInput.value = "";
+  if (kgCategoryFilter) kgCategoryFilter.value = "all";
+  await loadAdminKbFiles();
+});
+kgCategoryFilter?.addEventListener("change", async () => {
+  kbManageState.category = kgCategoryFilter.value || "all";
+  kbManageState.page = 1;
+  await loadAdminKbFiles();
+});
+
 profileSaveBtn?.addEventListener("click", saveUserProfile);
 profileAvatarInput?.addEventListener("change", (e) => {
   const file = e?.target?.files?.[0];
@@ -2269,7 +2384,7 @@ renderCurrentSession();
 
 const cur = getCurrentSession();
 if (!cur || cur.messages.length === 0) {
-  const greet = "你好，我是你的工业故障问答助手。现在可同时结合文本知识库、Neo4j知识图谱和本地Ollama模型回答问题。";
+  const greet = "你好，我是你的工业故障问答助手。现在可同时结合文本知识库、Neo4j知识图谱与云端大模型回答问题。";
   appendMessage("bot", greet, []);
   addSessionMessage("bot", greet, []);
 }

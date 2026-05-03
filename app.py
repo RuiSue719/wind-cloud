@@ -496,69 +496,57 @@ class Neo4jService:
         self._lock = threading.Lock()
 
     def update_config(self, uri: str, user: str, password: str, database: str) -> None:
-        self.uri = uri or self.uri
-        self.user = user or self.user
-        self.password = password or self.password
-        self.database = database or self.database
-        if self._driver is not None:
-            try:
-                self._driver.close()
-            except Exception:
-                pass
-        self._driver = None
+        # 强制重置所有配置，销毁旧连接
+        self.uri = uri
+        self.user = user
+        self.password = password
+        self.database = database
+        self._close_driver()
         self.last_error = ""
 
+    def _close_driver(self):
+        """优雅关闭驱动，避免残留连接"""
+        with self._lock:
+            if self._driver:
+                try:
+                    self._driver.close()
+                except:
+                    pass
+            self._driver = None
+
     def _driver_or_none(self):
+        """只尝试连接一次，绝不重试！"""
         with self._lock:
             if self._driver is not None:
                 return self._driver
             try:
-                self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
-                self._driver.verify_connectivity()
+                # ✅ Aura云端必须的SSL配置，少一个都连不上！
+                self._driver = GraphDatabase.driver(
+                    self.uri,
+                    auth=(self.user, self.password),
+                    encrypted=True,               # 强制加密，对应neo4j+s://协议
+                    trust="TRUST_ALL_CERTIFICATES",  # 信任Aura的SSL证书，避免拦截
+                    connection_timeout=20,         # 20秒超时，避免无限等待
+                    max_connection_lifetime=3600  # 连接生命周期，防止Aura主动断开
+                )
+                # 验证连接
+                self._driver.verify_connectivity(database=self.database)
                 self.last_error = ""
+                print(f"[Neo4j] ✅ 连接成功！数据库：{self.database}")
                 return self._driver
             except Exception as exc:
+                self.last_error = str(exc)
                 self._driver = None
-                err_text = str(exc)
-                self.last_error = err_text
-                unauthorized = "unauthorized" in err_text.lower() or "authentication failure" in err_text.lower()
-                should_try_fallback = unauthorized and (
-                    self.uri != NEO4J_URI_FALLBACK
-                    or self.user != NEO4J_USER_FALLBACK
-                    or self.password != NEO4J_PASSWORD_FALLBACK
-                    or self.database != NEO4J_DATABASE_FALLBACK
-                )
-                if should_try_fallback:
-                    try:
-                        self.uri = NEO4J_URI_FALLBACK
-                        self.user = NEO4J_USER_FALLBACK
-                        self.password = NEO4J_PASSWORD_FALLBACK
-                        self.database = NEO4J_DATABASE_FALLBACK
-                        self._driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
-                        self._driver.verify_connectivity()
-                        self.last_error = ""
-                        return self._driver
-                    except Exception as fallback_exc:
-                        self._driver = None
-                        self.last_error = str(fallback_exc)
+                print(f"[Neo4j] ❌ 连接失败：{self.last_error}")
                 return None
 
-    def _driver_with_retries(self, retries: int = 3, interval_sec: float = 0.8):
-        retries = max(1, int(retries))
-        for idx in range(retries):
-            driver = self._driver_or_none()
-            if driver is not None:
-                return driver
-            if idx < retries - 1:
-                time.sleep(max(0.1, float(interval_sec)))
-        return None
-
     def available(self) -> bool:
-        return self._driver_with_retries(retries=2, interval_sec=0.6) is not None
+        # 只尝试一次连接，绝不重试！
+        return self._driver_or_none() is not None
 
     def run_read(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         params = params or {}
-        driver = self._driver_with_retries(retries=3, interval_sec=0.8)
+        driver = self._driver_or_none()
         if driver is None:
             return []
         try:
@@ -567,24 +555,11 @@ class Neo4jService:
                 return [record.data() for record in result]
         except Exception as exc:
             self.last_error = str(exc)
-            with self._lock:
-                if self._driver is not None:
-                    try:
-                        self._driver.close()
-                    except Exception:
-                        pass
-                    self._driver = None
-            retry_driver = self._driver_with_retries(retries=3, interval_sec=0.8)
-            if retry_driver is None:
-                return []
-            try:
-                with retry_driver.session(database=self.database) as session:
-                    result = session.run(query, params)
-                    return [record.data() for record in result]
-            except Exception as retry_exc:
-                self.last_error = str(retry_exc)
-                return []
+            # 连接失败时，只重置一次驱动，不再重试
+            self._close_driver()
+            return []
 
+    # 下面的 count_nodes、get_graph 等方法保持不变，不用修改
     def count_nodes(self) -> int:
         rows = self.run_read("MATCH (n) RETURN count(n) AS cnt")
         if not rows:
@@ -603,7 +578,7 @@ class Neo4jService:
                    labels(n) AS source_labels,
                    type(r) AS rel_type,
                    elementId(m) AS target_id,
-                   coalesce(m.name, m.title, labels(m)[0] + '_' + elementId(m)) AS target_name,
+                   coalesce(m.name, m.title, labels(males(n)[0] + '_' + elementId(m))) AS target_name,
                    labels(m) AS target_labels
             LIMIT $limit
             """,
@@ -680,7 +655,6 @@ class Neo4jService:
         if not rows:
             return ""
         return str(rows[0].get("label") or "").strip()
-
 
 
 class CloudLLMService:
@@ -837,7 +811,7 @@ neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABA
 # ollama_service = OllamaService(OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT)
 cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
 
-
+'''
 def warmup_neo4j_async(retries: int = 6, interval_sec: float = 2.0) -> None:
     def _worker():
         for _ in range(max(1, retries)):
@@ -849,7 +823,7 @@ def warmup_neo4j_async(retries: int = 6, interval_sec: float = 2.0) -> None:
 
 
 warmup_neo4j_async()
-
+'''
 
 def _db_connect():
     conn = sqlite3.connect(USER_DB_PATH)

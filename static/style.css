@@ -1211,6 +1211,10 @@ body {
   grid-template-columns: 98px 130px minmax(220px, 1fr) 68px 68px;
 }
 
+.decision-toolbar {
+  grid-template-columns: minmax(220px, 2fr) 140px 120px minmax(220px, 2fr) 68px 68px;
+}
+
 #kgManageListWrap {
   margin-bottom: 10px;
 }

@@ -2,6 +2,7 @@ import csv
 import os
 from neo4j import GraphDatabase
 
+# AI辅助生成，deepseek,2026-04-29
 # ========== 修改这里 ==========
 AURA_URI = "neo4j+s://01a0e5bf.databases.neo4j.io"   # 你的 AuraDB URL
 AURA_USER = "01a0e5bf"

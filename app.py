@@ -14,7 +14,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from flask import Flask, jsonify, render_template, request, session, redirect, url_for
+from flask import Flask, jsonify, render_template, request, session, redirect, url_for, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import requests
@@ -61,7 +61,7 @@ NEO4J_USER = "01a0e5bf"
 NEO4J_PASSWORD = "JZ920NcZWJmZe3Cc3WjYNouz7hOvk1Qxr8XfPSPRjXU"
 NEO4J_DATABASE = "01a0e5bf"
 
-# 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW
+# 移除 OLLAMA 相关的环境变量，添加 SILICONFLOW，AI辅助生成，deepseek,2026-05-03
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
 SILICONFLOW_MODEL = os.environ.get("SILICONFLOW_MODEL", "Qwen/Qwen3-8B")
 
@@ -603,7 +603,7 @@ class ChromaHybridRetriever:
             self.last_error = f"Chroma 检索失败：{exc}"
             return []
 
-
+# AI辅助生成，deepseek,2026-05-02
 class Neo4jService:
     def __init__(self, uri: str, user: str, password: str, database: str) -> None:
         self.uri = uri
@@ -746,6 +746,7 @@ class Neo4jService:
         )
         return str(rows[0]["label"]) if rows else ""
 
+# AI辅助生成，deepseek,2026-05-03
 class CloudLLMService:
     def __init__(self, api_key: str, default_model: str) -> None:
         self.api_key = api_key
@@ -852,6 +853,7 @@ NETWORK_FEATURE_PATH = BASE_DIR / "网络特点.txt"
 USER_DB_PATH = BASE_DIR / "users.sqlite3"
 AVATAR_UPLOAD_DIR = BASE_DIR / "static" / "uploads" / "avatars"
 ALLOWED_AVATAR_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+DECISION_RULEBOOK_PATH = BASE_DIR / "数据诊断结果维护规则库.md"
 DIAG_INPUT_LEN = 1024
 DIAG_DATASET_ROOTS = {
     "CWRU": BASE_DIR / "CRWU",
@@ -882,15 +884,15 @@ DIAG_MODEL_TIPS_DEFAULT = {
 DIAG_CLASS_NAMES = {
     "CWRU": [
         "正常",
-        "内圈故障-轻度(0.007in)",
-        "内圈故障-中度(0.014in)",
-        "内圈故障-重度(0.021in)",
-        "外圈故障-轻度(0.007in)",
-        "外圈故障-中度(0.014in)",
-        "外圈故障-重度(0.021in)",
-        "滚动体故障-轻度(0.007in)",
-        "滚动体故障-中度(0.014in)",
-        "滚动体故障-重度(0.021in)",
+        "内圈故障-(0.007英寸)",
+        "内圈故障-(0.014英寸)",
+        "内圈故障-(0.021英寸)",
+        "外圈故障-(0.007英寸)",
+        "外圈故障-(0.014英寸)",
+        "外圈故障-(0.021英寸)",
+        "滚动体故障-(0.007英寸)",
+        "滚动体故障-(0.014英寸)",
+        "滚动体故障-(0.021英寸)",   
     ],
     "MFPT": ["正常", "外圈故障", "内圈故障"],
 }
@@ -900,6 +902,122 @@ kb = KnowledgeBase(KB_PATHS, csv_dir=CSV_KB_DIR)
 chroma_retriever = ChromaHybridRetriever(kb, CHROMA_DB_DIR)
 neo4j_service = Neo4jService(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE)
 cloud_llm = CloudLLMService(SILICONFLOW_API_KEY, SILICONFLOW_MODEL)
+
+DECISION_FAULT_CATEGORIES = ["正常", "外圈故障", "内圈故障", "滚动体故障"]
+
+
+def _extract_md_section(block: str, heading_pattern: str) -> str:
+    m = re.search(heading_pattern, block, re.S)
+    return (m.group(1).strip() if m else "")
+
+
+def _extract_md_list(block: str, heading_name: str) -> str:
+    m = re.search(rf"###\s*{re.escape(heading_name)}\s*(.*?)(?=\n###\s+|\n---|\Z)", block, re.S)
+    if not m:
+        return ""
+    lines = []
+    for line in m.group(1).splitlines():
+        text = re.sub(r"^\s*-\s*", "", line).strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def load_decision_rules(path: Path) -> Dict[str, Dict[str, str]]:
+    fallback = {
+        "正常": {
+            "机理": "设备当前状态整体稳定，未发现显著故障特征。",
+            "建议": "维持周期监测与常规润滑维护，关注趋势变化。",
+            "不维修可能后果": "若长期忽视维护，可能演化为早期磨损并触发非计划停机。",
+        },
+        "外圈故障": {
+            "机理": "外圈滚道存在磨损或剥落，冲击特征在外圈通过频率附近突出。",
+            "建议": "尽快安排检修并校核润滑状态、载荷与安装精度。",
+            "不维修可能后果": "故障扩展后将导致振动升高、轴承座损伤及相关部件连带损坏。",
+        },
+        "内圈故障": {
+            "机理": "内圈滚道剥落或裂纹引起周期性冲击，常伴随边频带特征。",
+            "建议": "尽快停机检修并更换轴承，复核装配、对中与润滑系统。",
+            "不维修可能后果": "可能发展为内圈断裂、保持架损坏甚至转轴锁死。",
+        },
+        "滚动体故障": {
+            "机理": "滚动体表面点蚀或剥落导致接触应力集中，冲击能量快速上升。",
+            "建议": "应立即停机并优先更换，排查过载与润滑污染问题。",
+            "不维修可能后果": "存在轴承解体与传动链毁伤风险，严重时危及设备安全。",
+        },
+    }
+    if not path.exists():
+        return fallback
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return fallback
+
+    out = dict(fallback)
+    for category in DECISION_FAULT_CATEGORIES:
+        m = re.search(rf"##\s+[^\n]*{re.escape(category)}\s*(.*?)(?=\n---|\Z)", text, re.S)
+        if not m:
+            continue
+        block = m.group(1)
+        mechanism = _extract_md_section(block, r"\*\*(?:机理|状态)：\*\*\s*(.+?)(?=\n###\s+|\Z)")
+        advice = _extract_md_list(block, "建议")
+        consequence = _extract_md_list(block, "不维修可能后果（偏离正常维护）") or _extract_md_list(block, "不维修可能后果")
+        if mechanism:
+            out[category]["机理"] = mechanism
+        if advice:
+            out[category]["建议"] = advice
+        if consequence:
+            out[category]["不维修可能后果"] = consequence
+    return out
+
+
+DECISION_RULES = load_decision_rules(DECISION_RULEBOOK_PATH)
+
+
+def resolve_fault_category(fault_name: str) -> str:
+    text = (fault_name or "").strip()
+    if not text:
+        return ""
+    for category in DECISION_FAULT_CATEGORIES:
+        if category in text:
+            return category
+    return ""
+
+
+def confidence_to_percent(confidence: Any) -> float:
+    try:
+        value = float(confidence)
+    except Exception:
+        return 0.0
+    if value <= 1.0:
+        value *= 100.0
+    return max(0.0, min(100.0, value))
+
+
+def risk_level_from_confidence(confidence_percent: float) -> str:
+    if confidence_percent < 50.0:
+        return "低风险"
+    if confidence_percent <= 80.0:
+        return "中风险"
+    return "高风险"
+
+
+def build_decision_payload(fault_name: str, confidence: Any) -> Dict[str, Any]:
+    fault = (fault_name or "").strip()
+    category = resolve_fault_category(fault)
+    if not category:
+        raise ValueError("无法识别故障类型，请包含“正常/外圈故障/内圈故障/滚动体故障”关键字。")
+    rule = DECISION_RULES.get(category) or {}
+    confidence_percent = confidence_to_percent(confidence)
+    return {
+        "fault_name": fault,
+        "fault_category": category,
+        "mechanism": str(rule.get("机理", "")).strip(),
+        "suggestions": str(rule.get("建议", "")).strip(),
+        "consequence": str(rule.get("不维修可能后果", "")).strip(),
+        "confidence": confidence_percent,
+        "risk_level": risk_level_from_confidence(confidence_percent),
+    }
 
 
 def refresh_knowledge_indexes() -> None:
@@ -954,6 +1072,27 @@ def init_user_db() -> None:
                 relation_text TEXT NOT NULL,
                 consequence TEXT NOT NULL,
                 case_source TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS intelligent_decision_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fault_name TEXT NOT NULL,
+                fault_category TEXT NOT NULL,
+                mechanism TEXT NOT NULL,
+                suggestions TEXT NOT NULL,
+                consequence TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0,
+                risk_level TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_dataset TEXT DEFAULT '',
+                source_model TEXT DEFAULT '',
+                source_file TEXT DEFAULT '',
+                created_by TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -1149,6 +1288,70 @@ def normalize_case_record_payload(payload: Dict[str, Any]) -> Dict[str, str]:
         "consequence": consequence,
         "case_source": case_source,
     }
+
+
+def normalize_decision_update_payload(payload: Dict[str, Any], old_row: sqlite3.Row) -> Dict[str, Any]:
+    fault_name = str(payload.get("故障名称", old_row["fault_name"]) or "").strip()
+    mechanism = str(payload.get("机理", old_row["mechanism"]) or "").strip()
+    suggestions = str(payload.get("建议", old_row["suggestions"]) or "").strip()
+    consequence = str(payload.get("不维修可能后果", old_row["consequence"]) or "").strip()
+    confidence_percent = confidence_to_percent(payload.get("confidence", old_row["confidence"]))
+    if not fault_name or not mechanism or not suggestions or not consequence:
+        raise ValueError("请完整填写“故障名称、机理、建议、不维修可能后果”。")
+    category = resolve_fault_category(fault_name) or str(old_row["fault_category"] or "").strip() or "未知"
+    return {
+        "fault_name": fault_name,
+        "fault_category": category,
+        "mechanism": mechanism,
+        "suggestions": suggestions,
+        "consequence": consequence,
+        "confidence": confidence_percent,
+        "risk_level": risk_level_from_confidence(confidence_percent),
+    }
+
+
+def _decision_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "故障名称": row["fault_name"] or "",
+        "机理": row["mechanism"] or "",
+        "建议": row["suggestions"] or "",
+        "不维修可能后果": row["consequence"] or "",
+        "riskLevel": row["risk_level"] or "",
+        "confidence": round(float(row["confidence"] or 0.0), 2),
+        "source": row["source"] or "",
+        "sourceDataset": row["source_dataset"] or "",
+        "sourceModel": row["source_model"] or "",
+        "sourceFile": row["source_file"] or "",
+        "updatedAt": row["updated_at"] or "",
+    }
+
+
+def _decision_scope_where_sql() -> Dict[str, Any]:
+    if is_admin_session():
+        return {"sql": "", "args": []}
+    username = (session.get("username") or "").strip()
+    return {"sql": "created_by = ?", "args": [username]}
+
+
+def _query_decision_row(record_id: int) -> Optional[sqlite3.Row]:
+    scope = _decision_scope_where_sql()
+    where_parts = ["id = ?"]
+    where_parts.extend([scope["sql"]] if scope["sql"] else [])
+    where_sql = " AND ".join(where_parts)
+    args = [record_id] + scope["args"]
+    with _db_connect() as conn:
+        cur = conn.execute(
+            f"""
+            SELECT id, fault_name, fault_category, mechanism, suggestions, consequence,
+                   confidence, risk_level, source, source_dataset, source_model, source_file, updated_at
+            FROM intelligent_decision_records
+            WHERE {where_sql}
+            LIMIT 1
+            """,
+            tuple(args),
+        )
+        return cur.fetchone()
 
 
 init_user_db()
@@ -1711,7 +1914,7 @@ def require_login():
         return jsonify({"error": "未登录，请先使用默认账号 admin / 123456 登录。"}), 401
     return redirect(url_for("login"))
 
-
+# AI辅助生成，deepseek,2026-04-30
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -2068,6 +2271,246 @@ def admin_case_record_import():
     if inserted == 0:
         return jsonify({"error": "导入失败：所选行缺少必要字段。"}), 400
     return jsonify({"ok": True, "imported": inserted})
+
+
+@app.get("/api/intelligent-decisions")
+def intelligent_decisions():
+    page = max(1, request.args.get("page", default=1, type=int))
+    page_size = min(100, max(1, request.args.get("pageSize", default=10, type=int)))
+    keyword = (request.args.get("keyword") or "").strip()
+    scope = _decision_scope_where_sql()
+
+    where_parts: List[str] = []
+    where_args: List[Any] = []
+    if scope["sql"]:
+        where_parts.append(scope["sql"])
+        where_args.extend(scope["args"])
+    if keyword:
+        where_parts.append("(fault_name LIKE ? OR mechanism LIKE ? OR suggestions LIKE ? OR consequence LIKE ?)")
+        like_kw = f"%{keyword}%"
+        where_args.extend([like_kw, like_kw, like_kw, like_kw])
+    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    offset = (page - 1) * page_size
+
+    with _db_connect() as conn:
+        count_row = conn.execute(
+            f"SELECT COUNT(1) AS cnt FROM intelligent_decision_records {where_clause}",
+            tuple(where_args),
+        ).fetchone()
+        total = int(count_row["cnt"]) if count_row else 0
+        cur = conn.execute(
+            f"""
+            SELECT id, fault_name, fault_category, mechanism, suggestions, consequence,
+                   confidence, risk_level, source, source_dataset, source_model, source_file, updated_at
+            FROM intelligent_decision_records
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(where_args + [page_size, offset]),
+        )
+        rows = [_decision_row_to_dict(r) for r in cur.fetchall()]
+    pages = (total + page_size - 1) // page_size if total else 1
+    return jsonify(
+        {
+            "columns": ["故障名称", "机理", "建议", "不维修可能后果"],
+            "rows": rows,
+            "pagination": {"page": page, "pageSize": page_size, "total": total, "pages": pages},
+        }
+    )
+
+
+@app.post("/api/intelligent-decisions/generate")
+def intelligent_decision_generate():
+    payload = request.get_json(silent=True) or {}
+    fault_name = str(payload.get("faultName", "") or "").strip()
+    if not fault_name:
+        return jsonify({"error": "请输入故障名称。"}), 400
+    confidence = payload.get("confidence", 0)
+    try:
+        built = build_decision_payload(fault_name, confidence)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    now = _utc_now_iso()
+    created_by = (session.get("username") or "").strip() or "unknown"
+    with _db_connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO intelligent_decision_records (
+                fault_name, fault_category, mechanism, suggestions, consequence,
+                confidence, risk_level, source, source_dataset, source_model, source_file,
+                created_by, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                built["fault_name"],
+                built["fault_category"],
+                built["mechanism"],
+                built["suggestions"],
+                built["consequence"],
+                built["confidence"],
+                built["risk_level"],
+                "manual",
+                "",
+                "",
+                "",
+                created_by,
+                now,
+                now,
+            ),
+        )
+        record_id = int(cur.lastrowid or 0)
+        conn.commit()
+    row = _query_decision_row(record_id)
+    return jsonify({"ok": True, "record": _decision_row_to_dict(row) if row else {}})
+
+
+@app.post("/api/intelligent-decisions/from-diagnosis")
+def intelligent_decision_from_diagnosis():
+    payload = request.get_json(silent=True) or {}
+    prediction = str(payload.get("prediction", "") or "").strip()
+    if not prediction:
+        return jsonify({"error": "缺少诊断结果 prediction。"}), 400
+    confidence = payload.get("confidence", 0)
+    dataset = str(payload.get("dataset", "") or "").strip()
+    model = str(payload.get("model", "") or "").strip()
+    file_path = str(payload.get("filePath", "") or "").strip()
+    try:
+        built = build_decision_payload(prediction, confidence)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    now = _utc_now_iso()
+    created_by = (session.get("username") or "").strip() or "unknown"
+    with _db_connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO intelligent_decision_records (
+                fault_name, fault_category, mechanism, suggestions, consequence,
+                confidence, risk_level, source, source_dataset, source_model, source_file,
+                created_by, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                built["fault_name"],
+                built["fault_category"],
+                built["mechanism"],
+                built["suggestions"],
+                built["consequence"],
+                built["confidence"],
+                built["risk_level"],
+                "diagnosis",
+                dataset,
+                model,
+                file_path,
+                created_by,
+                now,
+                now,
+            ),
+        )
+        record_id = int(cur.lastrowid or 0)
+        conn.commit()
+    row = _query_decision_row(record_id)
+    return jsonify({"ok": True, "record": _decision_row_to_dict(row) if row else {}})
+
+
+@app.get("/api/intelligent-decisions/<int:record_id>")
+def intelligent_decision_detail(record_id: int):
+    row = _query_decision_row(record_id)
+    if not row:
+        return jsonify({"error": "记录不存在或无权限访问。"}), 404
+    return jsonify({"record": _decision_row_to_dict(row)})
+
+
+@app.put("/api/intelligent-decisions/<int:record_id>")
+def intelligent_decision_update(record_id: int):
+    scope = _decision_scope_where_sql()
+    where_parts = ["id = ?"]
+    where_parts.extend([scope["sql"]] if scope["sql"] else [])
+    where_sql = " AND ".join(where_parts)
+    where_args = [record_id] + scope["args"]
+    payload = request.get_json(silent=True) or {}
+    with _db_connect() as conn:
+        cur = conn.execute(
+            f"SELECT * FROM intelligent_decision_records WHERE {where_sql} LIMIT 1",
+            tuple(where_args),
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "记录不存在或无权限访问。"}), 404
+        try:
+            normalized = normalize_decision_update_payload(payload, row)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        conn.execute(
+            """
+            UPDATE intelligent_decision_records
+            SET fault_name = ?, fault_category = ?, mechanism = ?, suggestions = ?, consequence = ?,
+                confidence = ?, risk_level = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized["fault_name"],
+                normalized["fault_category"],
+                normalized["mechanism"],
+                normalized["suggestions"],
+                normalized["consequence"],
+                normalized["confidence"],
+                normalized["risk_level"],
+                _utc_now_iso(),
+                record_id,
+            ),
+        )
+        conn.commit()
+    updated = _query_decision_row(record_id)
+    return jsonify({"ok": True, "record": _decision_row_to_dict(updated) if updated else {}})
+
+
+@app.delete("/api/intelligent-decisions/<int:record_id>")
+def intelligent_decision_delete(record_id: int):
+    scope = _decision_scope_where_sql()
+    where_parts = ["id = ?"]
+    where_parts.extend([scope["sql"]] if scope["sql"] else [])
+    where_sql = " AND ".join(where_parts)
+    where_args = [record_id] + scope["args"]
+    with _db_connect() as conn:
+        cur = conn.execute(
+            f"SELECT id FROM intelligent_decision_records WHERE {where_sql} LIMIT 1",
+            tuple(where_args),
+        )
+        if not cur.fetchone():
+            return jsonify({"error": "记录不存在或无权限访问。"}), 404
+        conn.execute("DELETE FROM intelligent_decision_records WHERE id = ?", (record_id,))
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/intelligent-decisions/<int:record_id>/export-md")
+def intelligent_decision_export_md(record_id: int):
+    row = _query_decision_row(record_id)
+    if not row:
+        return jsonify({"error": "记录不存在或无权限访问。"}), 404
+    item = _decision_row_to_dict(row)
+    md = (
+        "# 智能决策记录\n\n"
+        f"- 故障名称：{item['故障名称']}\n"
+        f"- 风险程度：{item['riskLevel']}\n"
+        f"- 置信度：{item['confidence']}%\n"
+        f"- 记录来源：{item['source']}\n"
+        f"- 更新时间：{item['updatedAt']}\n\n"
+        "## 机理\n"
+        f"{item['机理']}\n\n"
+        "## 建议\n"
+        f"{item['建议']}\n\n"
+        "## 不维修可能后果\n"
+        f"{item['不维修可能后果']}\n"
+    )
+    filename = f"智能决策_{record_id}.md"
+    resp = Response(md, mimetype="text/markdown; charset=utf-8")
+    resp.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{requests.utils.quote(filename)}"
+    return resp
 
 
 @app.get("/api/admin/console")

@@ -1,4 +1,4 @@
-# 使用官方 Python 3.12 镜像（你也可以改成 3.11 或其他版本）
+# 使用官方 Python 3.12 镜像,AI辅助生成，deepseek,2026-05-02
 FROM python:3.12-slim-bullseye
 
 # 设置工作目录
@@ -19,5 +19,5 @@ COPY . .
 # 暴露端口（Railway 会通过环境变量 PORT 自动设置）
 EXPOSE $PORT
 
-# 启动命令（与你的项目一致，使用 gunicorn）
+# 启动命令（与你的项目一致，使用 gunicorn）,AI辅助生成，deepseek,2026-05-02
 CMD ["gunicorn", "app:app", "--timeout", "120", "--bind", "0.0.0.0:8080"]

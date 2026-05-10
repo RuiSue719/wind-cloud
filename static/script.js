@@ -117,6 +117,18 @@ const diagWaveCanvas = document.getElementById("diagWaveCanvas");
 const diagFftCanvas = document.getElementById("diagFftCanvas");
 const diagCustomTip = document.getElementById("diagCustomTip");
 const diagBackendStatus = document.getElementById("diagBackendStatus");
+const diagSaveDecisionBtn = document.getElementById("diagSaveDecisionBtn");
+const diagSaveDecisionMsg = document.getElementById("diagSaveDecisionMsg");
+const decisionFaultInput = document.getElementById("decisionFaultInput");
+const decisionConfidenceInput = document.getElementById("decisionConfidenceInput");
+const decisionGenerateBtn = document.getElementById("decisionGenerateBtn");
+const decisionSearchInput = document.getElementById("decisionSearchInput");
+const decisionSearchBtn = document.getElementById("decisionSearchBtn");
+const decisionResetBtn = document.getElementById("decisionResetBtn");
+const decisionModuleMeta = document.getElementById("decisionModuleMeta");
+const decisionMessage = document.getElementById("decisionMessage");
+const decisionTableWrap = document.getElementById("decisionTableWrap");
+const decisionPagination = document.getElementById("decisionPagination");
 
 let selectedImage = null;
 let recognition = null;
@@ -144,6 +156,7 @@ const diagState = {
   lastSignal: [],
   lastFft: [],
   lastResultLabel: "",
+  lastInference: null,
 };
 const caseState = {
   page: 1,
@@ -165,6 +178,13 @@ const kbManageState = {
   category: "all",
   categoryOptions: [],
   selectedFile: "",
+};
+const decisionState = {
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  pages: 1,
+  keyword: "",
 };
 let DIAG_MODEL_TIPS = {
   cnn: "专为一维时序振动信号设计，通过浅层卷积快速提取局部时域特征，适合数据量中等、追求轻量化快速推理的轴承故障诊断。",
@@ -261,6 +281,8 @@ function switchModule(targetId) {
     loadAdminConsole();
   } else if (targetId === "diagModule") {
     initDiagnosisModule();
+  } else if (targetId === "decisionModule") {
+    loadDecisionModule();
   } else if (targetId === "homeModule") {
     const dateEl = document.getElementById("homeTodayDate");
     if (dateEl) {
@@ -426,6 +448,10 @@ function resetDiagReportView() {
   diagState.lastSignal = [];
   diagState.lastFft = [];
   diagState.lastResultLabel = "";
+  diagState.lastInference = null;
+  if (diagSaveDecisionMsg) {
+    diagSaveDecisionMsg.textContent = "未保存诊断结果";
+  }
 }
 
 function renderDiagResult(result) {
@@ -458,6 +484,10 @@ function renderDiagResult(result) {
   diagState.lastSignal = Array.isArray(result.signal) ? result.signal : [];
   diagState.lastFft = Array.isArray(result.fft) ? result.fft : [];
   diagState.lastResultLabel = result.prediction || "-";
+  diagState.lastInference = { ...result };
+  if (diagSaveDecisionMsg) {
+    diagSaveDecisionMsg.textContent = "可将当前诊断结果保存到智能决策";
+  }
   drawDiagWave(diagState.lastSignal, diagState.lastResultLabel);
   drawDiagFFT(diagState.lastFft, diagState.lastResultLabel);
 }
@@ -895,6 +925,245 @@ function renderCasePagination() {
     caseState.page = Math.max(1, Math.min(caseState.pages, Math.round(target)));
     await loadAdminCaseModule();
   });
+}
+
+function setDecisionMessage(text = "") {
+  if (decisionMessage) {
+    decisionMessage.textContent = text;
+  }
+}
+
+async function loadDecisionModule() {
+  if (!decisionTableWrap || !decisionPagination) {
+    return;
+  }
+  decisionTableWrap.innerHTML = "<div class='admin-empty'>正在加载智能决策记录...</div>";
+  setDecisionMessage("");
+  try {
+    const params = new URLSearchParams({
+      page: String(decisionState.page),
+      pageSize: String(decisionState.pageSize),
+      keyword: decisionState.keyword || "",
+    });
+    const res = await fetch(`/api/intelligent-decisions?${params.toString()}`);
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "加载失败");
+    }
+    const pg = data.pagination || {};
+    decisionState.page = Number(pg.page || 1);
+    decisionState.pageSize = Number(pg.pageSize || 10);
+    decisionState.total = Number(pg.total || 0);
+    decisionState.pages = Math.max(1, Number(pg.pages || 1));
+    if (decisionModuleMeta) {
+      decisionModuleMeta.textContent = `共 ${decisionState.total} 条智能决策记录，每页 ${decisionState.pageSize} 条`;
+    }
+    renderDecisionTable(Array.isArray(data.rows) ? data.rows : []);
+    renderDecisionPagination();
+  } catch (e) {
+    decisionTableWrap.innerHTML = `<div class='admin-empty'>${escapeHtml(e.message || "加载失败")}</div>`;
+  }
+}
+
+function renderDecisionTable(rows) {
+  if (!decisionTableWrap) return;
+  const columns = ["故障名称", "机理", "建议", "不维修可能后果"];
+  const thead = `<tr>${columns.map((c) => `<th>${c}</th>`).join("")}<th>操作</th></tr>`;
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const tbody = safeRows.length
+    ? safeRows
+        .map(
+          (row) => `
+      <tr>
+        <td>${escapeHtml(row["故障名称"] || "")}</td>
+        <td>${escapeHtml(row["机理"] || "")}</td>
+        <td>${escapeHtml(row["建议"] || "")}</td>
+        <td>${escapeHtml(row["不维修可能后果"] || "")}</td>
+        <td>
+          <button class="case-op-btn" data-op="detail" data-id="${Number(row.id || 0)}">详情</button>
+          <button class="case-op-btn" data-op="edit" data-id="${Number(row.id || 0)}">编辑</button>
+          <button class="case-op-btn danger" data-op="delete" data-id="${Number(row.id || 0)}">删除</button>
+          <button class="case-op-btn" data-op="download" data-id="${Number(row.id || 0)}">下载MD</button>
+        </td>
+      </tr>`,
+        )
+        .join("")
+    : `<tr><td colspan="5">暂无数据</td></tr>`;
+  decisionTableWrap.innerHTML = `<div class="admin-table-scroll"><table class="admin-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+
+  decisionTableWrap.querySelectorAll(".case-op-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const op = btn.getAttribute("data-op") || "";
+      const recordId = Number(btn.getAttribute("data-id") || 0);
+      if (!recordId) return;
+      if (op === "download") {
+        window.open(`/api/intelligent-decisions/${recordId}/export-md`, "_blank");
+        return;
+      }
+      if (op === "detail") {
+        await showDecisionDetail(recordId);
+        return;
+      }
+      if (op === "delete") {
+        const ok = window.confirm("确定删除该条智能决策记录吗？");
+        if (!ok) return;
+        try {
+          const res = await fetch(`/api/intelligent-decisions/${recordId}`, { method: "DELETE" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "删除失败");
+          await loadDecisionModule();
+        } catch (e) {
+          setDecisionMessage(e.message || "删除失败");
+        }
+        return;
+      }
+      if (op === "edit") {
+        await editDecisionRecord(recordId);
+      }
+    });
+  });
+}
+
+function renderDecisionPagination() {
+  if (!decisionPagination) return;
+  const page = decisionState.page;
+  const pages = decisionState.pages;
+  decisionPagination.innerHTML = `
+    <span>第 ${page} / ${pages} 页</span>
+    <button class="case-page-btn" id="decisionPrevPageBtn" ${page <= 1 ? "disabled" : ""}>上一页</button>
+    <button class="case-page-btn" id="decisionNextPageBtn" ${page >= pages ? "disabled" : ""}>下一页</button>
+  `;
+  document.getElementById("decisionPrevPageBtn")?.addEventListener("click", async () => {
+    if (decisionState.page <= 1) return;
+    decisionState.page -= 1;
+    await loadDecisionModule();
+  });
+  document.getElementById("decisionNextPageBtn")?.addEventListener("click", async () => {
+    if (decisionState.page >= decisionState.pages) return;
+    decisionState.page += 1;
+    await loadDecisionModule();
+  });
+}
+
+async function showDecisionDetail(recordId) {
+  try {
+    const res = await fetch(`/api/intelligent-decisions/${recordId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "读取详情失败");
+    const row = data.record || {};
+    const text =
+      `故障名称：${row["故障名称"] || ""}\n` +
+      `风险程度：${row.riskLevel || ""}\n` +
+      `置信度：${row.confidence ?? 0}%\n` +
+      `机理：${row["机理"] || ""}\n\n` +
+      `建议：\n${row["建议"] || ""}\n\n` +
+      `不维修可能后果：\n${row["不维修可能后果"] || ""}`;
+    window.alert(text);
+  } catch (e) {
+    setDecisionMessage(e.message || "读取详情失败");
+  }
+}
+
+async function editDecisionRecord(recordId) {
+  try {
+    const res = await fetch(`/api/intelligent-decisions/${recordId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "读取记录失败");
+    const row = data.record || {};
+    const faultName = window.prompt("故障名称", row["故障名称"] || "");
+    if (faultName === null) return;
+    const mechanism = window.prompt("机理", row["机理"] || "");
+    if (mechanism === null) return;
+    const suggestions = window.prompt("建议", row["建议"] || "");
+    if (suggestions === null) return;
+    const consequence = window.prompt("不维修可能后果", row["不维修可能后果"] || "");
+    if (consequence === null) return;
+    const confidenceRaw = window.prompt("置信度（0-100）", String(row.confidence ?? 0));
+    if (confidenceRaw === null) return;
+    const confidence = Number(confidenceRaw || 0);
+    const updateRes = await fetch(`/api/intelligent-decisions/${recordId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        故障名称: faultName.trim(),
+        机理: mechanism.trim(),
+        建议: suggestions.trim(),
+        不维修可能后果: consequence.trim(),
+        confidence: Number.isFinite(confidence) ? confidence : 0,
+      }),
+    });
+    const updateData = await updateRes.json();
+    if (!updateRes.ok) throw new Error(updateData.error || "更新失败");
+    await loadDecisionModule();
+    setDecisionMessage("记录已更新。");
+  } catch (e) {
+    setDecisionMessage(e.message || "更新失败");
+  }
+}
+
+async function generateDecisionByInput() {
+  setDecisionMessage("");
+  const faultName = (decisionFaultInput?.value || "").trim();
+  const confidenceValue = Number(decisionConfidenceInput?.value || 0);
+  if (!faultName) {
+    setDecisionMessage("请先输入故障名称。");
+    return;
+  }
+  try {
+    const res = await fetch("/api/intelligent-decisions/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        faultName,
+        confidence: Number.isFinite(confidenceValue) ? confidenceValue : 0,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "生成失败");
+    setDecisionMessage(`已生成并保存，风险程度：${data.record?.riskLevel || "-"}`);
+    decisionState.page = 1;
+    await loadDecisionModule();
+  } catch (e) {
+    setDecisionMessage(e.message || "生成失败");
+  }
+}
+
+async function saveDiagToDecision() {
+  if (!diagState.lastInference) {
+    if (diagSaveDecisionMsg) diagSaveDecisionMsg.textContent = "当前无可保存的诊断结果，请先执行诊断";
+    return;
+  }
+  const result = diagState.lastInference;
+  if (diagSaveDecisionMsg) {
+    diagSaveDecisionMsg.textContent = "正在保存到智能决策...";
+  }
+  try {
+    const res = await fetch("/api/intelligent-decisions/from-diagnosis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prediction: result.prediction || "",
+        confidence: result.confidence || 0,
+        dataset: result.dataset || diagState.dataset || "",
+        model: result.modelCanonical || result.model || diagState.model || "",
+        filePath: result.filePath || diagState.filePath || "",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "保存失败");
+    if (diagSaveDecisionMsg) {
+      diagSaveDecisionMsg.textContent = `保存成功：风险程度 ${data.record?.riskLevel || "-"}`;
+    }
+    switchModule("decisionModule");
+  } catch (e) {
+    if (diagSaveDecisionMsg) {
+      diagSaveDecisionMsg.textContent = e.message || "保存失败";
+    }
+  }
 }
 
 function resetCaseModalMessage(text = "") {
@@ -2242,6 +2511,26 @@ caseSourceFilter?.addEventListener("change", async () => {
   caseState.page = 1;
   await loadAdminCaseModule();
 });
+decisionGenerateBtn?.addEventListener("click", generateDecisionByInput);
+decisionSearchBtn?.addEventListener("click", async () => {
+  decisionState.keyword = (decisionSearchInput?.value || "").trim();
+  decisionState.page = 1;
+  await loadDecisionModule();
+});
+decisionResetBtn?.addEventListener("click", async () => {
+  decisionState.keyword = "";
+  decisionState.page = 1;
+  if (decisionSearchInput) decisionSearchInput.value = "";
+  await loadDecisionModule();
+});
+decisionSearchInput?.addEventListener("keydown", async (e) => {
+  if (e.key === "Enter") {
+    decisionState.keyword = (decisionSearchInput?.value || "").trim();
+    decisionState.page = 1;
+    await loadDecisionModule();
+  }
+});
+diagSaveDecisionBtn?.addEventListener("click", saveDiagToDecision);
 
 kgUploadBtn?.addEventListener("click", () => kgUploadInput?.click());
 kgUploadInput?.addEventListener("change", async () => {

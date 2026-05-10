@@ -22,6 +22,7 @@
       <button class="side-nav-item" data-target="qaModule">智能问答</button>
       <button class="side-nav-item" data-target="kgModule">图谱可视化</button>
       <button class="side-nav-item" data-target="diagModule">数据诊断</button>
+      <button class="side-nav-item" data-target="decisionModule">智能决策</button>
       {% if not is_admin %}
       <button class="side-nav-item" data-target="profileModule">个人中心</button>
       {% endif %}
@@ -309,6 +310,31 @@
             <canvas id="diagFftCanvas" width="720" height="260"></canvas>
           </article>
         </div>
+        <div class="diag-actions">
+          <button id="diagSaveDecisionBtn" class="ghost-btn" type="button">保存到智能决策</button>
+          <div id="diagSaveDecisionMsg" class="diag-status">未保存诊断结果</div>
+        </div>
+      </section>
+      </main>
+
+      <main id="decisionModule" class="content module">
+      <section class="welcome-card">
+        <h1>智能决策</h1>
+        <p>根据故障类别自动生成机理、建议与风险程度，支持记录管理与导出 MD。</p>
+      </section>
+      <section class="admin-case-card">
+        <div class="case-toolbar decision-toolbar">
+          <input id="decisionFaultInput" class="case-input" type="text" placeholder="输入故障名称，如：内圈故障-(0.014英寸)" />
+          <input id="decisionConfidenceInput" class="case-input" type="number" min="0" max="100" step="0.01" placeholder="置信度(%)，如 86.3" />
+          <button id="decisionGenerateBtn" class="rect-primary-btn" type="button">生成并保存</button>
+          <input id="decisionSearchInput" class="case-input" type="text" placeholder="搜索故障名称/机理/建议/后果" />
+          <button id="decisionSearchBtn" class="ghost-btn" type="button">搜索</button>
+          <button id="decisionResetBtn" class="ghost-btn" type="button">重置</button>
+        </div>
+        <div id="decisionModuleMeta" class="admin-detail-title"></div>
+        <div id="decisionMessage" class="profile-msg"></div>
+        <div id="decisionTableWrap" class="admin-table-wrap"></div>
+        <div id="decisionPagination" class="case-pagination"></div>
       </section>
       </main>
 
